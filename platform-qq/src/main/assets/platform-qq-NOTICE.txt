@@ -1,0 +1,45 @@
+Musxi Player QQ Music Android native adapter
+Based on Musxi Player, Copyright (c) 2026 Miloscovo and contributors.
+Android login additions: 2026-10-18; native library/audio additions: 2026-10-19. GPL-3.0-or-later.
+
+Login protocol compatibility code is adapted from qqmusic-api-python 0.8.1,
+QQMusicApi commit 3fc57f02e4eddb68a069bba4e0e12a7893f2a814.
+Upstream project: https://github.com/L-1124/QQMusicApi
+Upstream author: Luren <68656403+luren-dc@users.noreply.github.com>.
+Its original GPL-3.0 license is retained in licenses/QQMusicApi-GPL-3.0.txt.
+Source modules include modules/login.py, core/{executor,versioning}.py,
+models/request.py and utils/common.py. Read-only library and audio protocol
+adaptations additionally reference modules/{user,songlist,song,search}.py and their
+models from the same pinned source. This Java adapter uses the WEB
+request profile; it does not bundle the Python runtime or its dependencies.
+
+2026-10-20 favorite synchronization additionally adapts
+qqmusic_api/modules/songlist.py from the PyPI qqmusic-api-python 0.8.1 wheel
+at the same pinned revision. Its add_songs, del_songs, like_song and
+unlike_song functions support single-track favorite add/remove operations.
+The existing GPL-3.0-or-later source and license are retained; no new
+production dependency or license change is included.
+
+2026-10-20 standard lyrics additionally adapt modules/lyric.py and
+models/lyric.py from qqmusic-api-python 0.8.1 at the same pinned revision.
+The Android adapter requests crypt=0/qrc=0 and handles standard text/LRC;
+it does not include QRC decryption or the upstream Python dependencies.
+
+2026-10-22 translation retrieval additionally uses trans=1/trans_t=0 and
+the response trans field from those same pinned lyric modules. Original
+and translated standard LRC are decoded and bounded independently; no
+QRC decryption or additional production dependency is included.
+
+The direct-open URI follows the official public PTLogin mobile page and
+login_10.js observed on 2026-10-18. The callback restores Musxi via
+musxiplayer://login-return; it only resumes checking the original attempt,
+and never accepts credentials or a success claim from the incoming URI. Compatibility remains experimental;
+this is not an official Tencent SDK integration or a claim of API approval.
+
+No QQ credentials, application private files, QR codes or music session
+materials are included. Public protocol application IDs identify existing
+platform endpoints, not a newly registered Musxi OAuth application.
+
+Matching source and build script: android/player/ in the accompanying
+Musxi Player checkout. This local debug APK is not a public release.
+JSON-java 20240303 is a Public Domain host-test dependency, not in the APK.

@@ -1,0 +1,21 @@
+.gradle/
+.kotlin/
+**/build/
+local.properties
+*.jks
+*.keystore
+.idea/
+.vscode/
+*.iml
+*.apk
+*.aab
+*.apks
+*.p12
+*.pfx
+keystore.properties
+signing.properties
+.env
+.env.*
+
+# Local source checkpoints, device evidence and maintenance records
+/.local/

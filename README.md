@@ -4,7 +4,7 @@ Musxi Player 的原生安卓开发项目，PC 来源：[Miloscovo/Musxi-Player](
 
 本次上游代码进展：[PR #25](https://github.com/Miloscovo/Musxi-Player/pull/25)（目标 android/development，状态以 GitHub 为准）。
 
-**v0.1 非常不完善。本次公开现有进展，仅为后续修改和实机测试奠定基础，不代表正式版或稳定版。** 当前源码版本为 `0.1.0-alpha02`；尚未发布正式 APK 或 Release。
+**v0.1 非常不完善。本次公开现有进展，仅为后续修改和实机测试奠定基础，不代表正式版或稳定版。** 已提供 [v0.1 预发布版](https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.1)，收录当前 `0.1.0-alpha02` 的 debug 签名 APK 和 SHA-256 校验文件，作为后续版本的起点。APK 需要 Android 8.0 / API 26 或更高版本；不代表正式稳定发行。
 
 ## 当前进展
 

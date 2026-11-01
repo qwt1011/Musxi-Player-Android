@@ -56,24 +56,34 @@ public final class QqMusicApi {
     }
 
     public static final class Session {
-        public final String musicId, nickname;
+        public final String musicId, nickname, avatarUrl;
         private final JSONObject credential;
         private Session(JSONObject credential, String nickname) throws IOException {
+            this(credential, nickname, null);
+        }
+        private Session(JSONObject credential, String nickname, String avatarUrl) throws IOException {
             this.credential = copyCredential(credential);
             musicId = scalar(this.credential, "musicid");
             if (!validId(musicId) || !safeSecret(scalar(this.credential, "musickey")))
                 throw error("credentials", "QQ 音乐未返回有效音乐凭证");
             this.nickname = cleanName(nickname);
+            this.avatarUrl = cleanAvatarUrl(avatarUrl);
         }
         /** A fresh copy for encrypted local storage only; never render or log it. */
         public JSONObject toJson() throws IOException {
-            try { return new JSONObject().put("credential", copyCredential(credential)).put("nickname", nickname); }
+            try {
+                return new JSONObject()
+                    .put("credential", copyCredential(credential))
+                    .put("nickname", nickname)
+                    .put("avatarUrl", avatarUrl == null ? JSONObject.NULL : avatarUrl);
+            }
             catch (JSONException invalid) { throw error("storage", "本地音乐会话格式无效"); }
         }
         public static Session fromJson(JSONObject value) throws IOException {
             if (value == null || value.optJSONObject("credential") == null)
                 throw error("storage", "本地音乐会话格式无效");
-            return new Session(value.optJSONObject("credential"), scalar(value, "nickname"));
+            return new Session(value.optJSONObject("credential"), scalar(value, "nickname"),
+                avatarValue(value.opt("avatarUrl")));
         }
     }
 
@@ -216,17 +226,37 @@ public final class QqMusicApi {
                 throw error("identity", "音乐身份校验账号不一致");
         }
         String nickname = session.nickname;
+        String avatarUrl = session.avatarUrl;
+        JSONObject loginInfo = data.optJSONObject("info");
+        String loginAvatar = null;
+        if (loginInfo != null) {
+            for (String name : new String[] {"musicid", "musicId", "str_musicid"}) {
+                if (loginInfo.has(name) && !session.musicId.equals(scalar(loginInfo, name)))
+                    throw error("identity", "音乐身份校验账号不一致");
+            }
+            String currentName = scalar(loginInfo, "nick");
+            if (!currentName.isEmpty()) nickname = cleanName(currentName);
+            loginAvatar = avatarValue(loginInfo.opt("logo"));
+            if (loginAvatar != null) avatarUrl = loginAvatar;
+        }
         String euin = scalar(session.credential, "encryptUin");
-        if (!euin.isEmpty()) {
+        if (loginAvatar == null && !euin.isEmpty()) {
             try {
                 JSONObject profile = cgi("music.UnifiedHomepage.UnifiedHomepageSrv", "GetHomepageHeader",
                     object("uin", euin, "IsQueryTabDetail", 1), session);
                 JSONObject info = profile.optJSONObject("Info");
                 JSONObject base = info == null ? null : info.optJSONObject("BaseInfo");
-                if (base != null) nickname = cleanName(scalar(base, "Name"));
+                if (base != null) {
+                    nickname = cleanName(scalar(base, "Name"));
+                    String currentAvatar = avatarValue(base.opt("HeadPic"));
+                    if (currentAvatar == null) currentAvatar = avatarValue(base.opt("HeadPicUrl"));
+                    if (currentAvatar == null) currentAvatar = avatarValue(base.opt("AvatarUrl"));
+                    if (currentAvatar == null) currentAvatar = avatarValue(base.opt("Avatar"));
+                    if (currentAvatar != null) avatarUrl = currentAvatar;
+                }
             } catch (ApiException unavailable) { /* Public display info is optional, never identity proof. */ }
         }
-        return new Session(session.credential, nickname);
+        return new Session(session.credential, nickname, avatarUrl);
     }
 
     /** One negative control, same music account with a freshly random invalid key. */
@@ -235,7 +265,7 @@ public final class QqMusicApi {
         JSONObject invalid = copyCredential(session.credential);
         try { invalid.put("musickey", "musxi-invalid-" + UUID.randomUUID()); }
         catch (JSONException impossible) { throw error("protocol", "无法创建鉴权对照"); }
-        Session probe = new Session(invalid, session.nickname);
+        Session probe = new Session(invalid, session.nickname, session.avatarUrl);
         try {
             JSONObject data = cgi("music.UserInfo.userInfoServer", "GetLoginUserInfo", new JSONObject(), probe);
             if (data.length() == 0) throw error("identity", "鉴权对照返回空结构，暂无法判断");
@@ -555,6 +585,9 @@ public final class QqMusicApi {
     private static String scalar(JSONObject value, String key) {
         Object raw = value.opt(key); return raw instanceof String || raw instanceof Number ? String.valueOf(raw) : "";
     }
+    private static String avatarValue(Object raw) {
+        return raw instanceof String ? cleanAvatarUrl((String)raw) : null;
+    }
     private static Integer integerField(JSONObject value, String... names) {
         if (value == null) return null;
         for (String name : names) {
@@ -631,6 +664,12 @@ public final class QqMusicApi {
     private static String cleanName(String value) {
         if (value == null || value.isEmpty()) return "QQ 音乐用户";
         String clean = value.replaceAll("[\\p{Cc}\\p{Cf}]", ""); return clean.isEmpty() ? "QQ 音乐用户" : clean.substring(0, Math.min(120, clean.length()));
+    }
+    private static String cleanAvatarUrl(String value) {
+        if (value == null) return null;
+        String clean = value.trim();
+        if (clean.isEmpty() || clean.length() > 2048 || clean.matches("(?s).*[\\p{Cc}\\p{Cf}].*")) return null;
+        return clean;
     }
     private static boolean isPng(byte[] bytes) {
         int[] magic = {137, 80, 78, 71, 13, 10, 26, 10};

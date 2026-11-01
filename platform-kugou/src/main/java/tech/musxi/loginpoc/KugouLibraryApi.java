@@ -728,7 +728,13 @@ public final class KugouLibraryApi {
             : selectAudio(audio,audioProbe);
     }
     static Page<Playlist> parsePlaylists(JSONObject root,int offset,int limit) throws IOException {
-        JSONObject data=success(root); JSONArray rows=rows(data,"info","lists");
+        JSONObject data=success(root);
+        // A null page with no explicit zero count is not proof of an empty account library.
+        if(offset==0 && !(data.opt("info") instanceof JSONArray) &&
+            !(data.opt("lists") instanceof JSONArray) &&
+            ((data.has("info") && data.isNull("info")) || (data.has("lists") && data.isNull("lists"))) &&
+            total(data)!=0)throw error("incomplete");
+        JSONArray rows=rows(data,"info","lists");
         if(rows.length()>limit) throw error("limit");
         List<Playlist> out=new ArrayList<>(); Set<String> ids=new HashSet<>();
         for(int i=0;i<rows.length();i++) {

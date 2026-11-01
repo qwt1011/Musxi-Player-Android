@@ -1,6 +1,5 @@
 package tech.musxi.player
 
-import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
 import java.util.concurrent.CompletableFuture
@@ -11,7 +10,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Rule
+import org.junit.Before
+import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
 import tech.musxi.core.account.AccountPhase
@@ -28,25 +28,34 @@ import tech.musxi.core.settings.AppSettings
  */
 @RunWith(AndroidJUnit4::class)
 class BackendBatch4DeviceTest {
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    private lateinit var compose: BackendBatch5DeviceTest.PhoneDriver
+    @Before fun openProduct() { compose = BackendBatch5DeviceTest.PhoneDriver() }
+    @After fun leavePaused() {
+        if (this::compose.isInitialized) compose.runOnIdle {
+            (compose.activity.application as MusxiApplication).playback.pause()
+        }
+    }
     private val originalPlatform: Platform get() = Platform.valueOf(
         androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("originalPlatform", "KUGOU")!!,
     )
 
-    @Test fun restoreLatestQqQueuePaused() {
+    @Test fun restoreLatestQqQueuePaused() = restoreLatestQueuePaused(Platform.QQ)
+    @Test fun restoreLatestKugouQueuePaused() = restoreLatestQueuePaused(Platform.KUGOU)
+
+    private fun restoreLatestQueuePaused(platform: Platform) {
         val app = compose.activity.application as MusxiApplication
         compose.waitUntil(60_000) {
-            app.playbackJournal.state.value.getValue(Platform.QQ).let {
+            app.playbackJournal.state.value.getValue(platform).let {
                 it.accountVerified && !it.loading && it.queue?.songs?.isNotEmpty() == true
             }
         }
-        val saved = requireNotNull(app.playbackJournal.state.value.getValue(Platform.QQ).queue)
-        val generation = app.accounts.states.value.getValue(Platform.QQ).generation
+        val saved = requireNotNull(app.playbackJournal.state.value.getValue(platform).queue)
+        val generation = app.accounts.states.value.getValue(platform).generation
         restoreQueue(app, PlaybackQueue(saved.songs, saved.index, generation), saved)
         compose.waitUntil(15_000) { app.playback.state.value.connected && app.playback.state.value.queueSize == saved.songs.size }
         val state = app.playback.state.value
         val matches = app.playback.queueState.value.songs == saved.songs
-        val report = JSONObject().put("queuePlatform", "QQ").put("queueSize", state.queueSize)
+        val report = JSONObject().put("queuePlatform", platform.name).put("queueSize", state.queueSize)
             .put("queueIndex", state.queueIndex).put("positionMs", state.positionMs)
             .put("playing", state.playing).put("playWhenReady", state.playWhenReady)
             .put("orderMatches", matches).put("settings", "unchanged")

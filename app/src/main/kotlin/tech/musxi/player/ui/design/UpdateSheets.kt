@@ -23,6 +23,7 @@ import tech.musxi.core.update.UpdateFailure
 import tech.musxi.core.update.UpdateState
 import tech.musxi.core.update.UpdateVersion
 import tech.musxi.player.ui.account.AboutSection
+import tech.musxi.player.ui.components.SectionGroup
 import tech.musxi.player.ui.account.UpdateActions
 import tech.musxi.player.ui.account.aboutUpdateUiOf
 import tech.musxi.player.ui.shell.ShellDock
@@ -60,10 +61,13 @@ fun UpdateSheet(
                     Spacer(Modifier.height(Space.section))
                     Text("我的", style = MaterialTheme.typography.headlineSmall, color = cs.onSurface)
                     Spacer(Modifier.height(Space.section))
-                    AboutSection(
-                        version = state.current.versionName, ui = ui, actions = UpdateActions(),
-                        initiallyExpanded = expanded, initiallyConfirming = confirming,
-                    )
+                    SectionGroup(title = "关于") {
+                        AboutSection(
+                            version = state.current.versionName, ui = ui, actions = UpdateActions(),
+                            initiallyExpanded = expanded, initiallyConfirming = confirming,
+                            showHeading = false,
+                        )
+                    }
                     Spacer(Modifier.height(Space.section))
                 }
                 if (dock) {

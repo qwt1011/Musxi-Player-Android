@@ -29,6 +29,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import tech.musxi.core.settings.ThemeMode
 import tech.musxi.player.design.DesignTestApplication
+import tech.musxi.player.ui.components.RowSpec
+import tech.musxi.player.ui.design.meMixedAccountStates
 import tech.musxi.player.ui.design.meSampleUi
 import tech.musxi.player.ui.theme.MusxiTheme
 
@@ -108,10 +110,38 @@ class MePageTest {
                 onOpenAccent = { opened += "accent" },
             ),
         )
-        for (title in listOf("网易云", "酷狗", "默认音质", "字号", "深色模式", "主题色")) {
+        // An account row is found by its first line: the nickname, or the platform when nobody is known.
+        for (title in listOf("云村用户 8842", "酷狗", "默认音质", "字号", "深色模式", "主题色")) {
             compose.onNodeWithText(title).performClick()
         }
         assertEquals(listOf("NETEASE", "KUGOU", "quality", "font", "dark", "accent"), opened)
+    }
+
+    @Test fun onlyRowsThatNeedTheUserSpeakAtTheRightEdge() {
+        setPage()
+        // Sample: a member, a non-member and a platform not connected yet.
+        compose.onNodeWithText("连接").assertExists()
+        compose.onNodeWithText("需要重新登录").assertDoesNotExist()
+        compose.onNodeWithText("网易云 · 会员").assertExists()
+        compose.runOnIdle { ui = ui.copy(accounts = meMixedAccountStates().map(::meAccountRowOf)) }
+        compose.onNodeWithText("需要重新登录").assertExists()
+        compose.onNodeWithText("登录已过期").assertExists()
+        compose.onNodeWithText("网络异常").assertExists()
+        compose.onNodeWithText("连接").assertDoesNotExist()
+    }
+
+    @Test fun anAccountRowStillSaysEverythingAtDoubleFontSize() {
+        setPage()
+        val row = compose.onNodeWithText("云村用户 8842")
+        val normal = row.fetchSemanticsNode().size.height
+        compose.runOnIdle { ui = ui.copy(accounts = meMixedAccountStates().map(::meAccountRowOf)) }
+        compose.runOnIdle { fontScale = 2f }
+        compose.waitForIdle()
+        // Status moves under the second line; nothing is dropped and the row grows.
+        compose.onNodeWithText("需要重新登录").assertExists()
+        compose.onNodeWithText("云村用户 8842").assertExists()
+        val large = compose.onNodeWithText("云村用户 8842").fetchSemanticsNode().size.height
+        assertTrue("account row stayed ${normal}px at font scale 2.0 (now ${large}px)", large > normal)
     }
 
     @Test fun theCacheRowClearsOnlyWhenThereIsSomethingToClear() {
@@ -127,10 +157,10 @@ class MePageTest {
 
     // --- layout --------------------------------------------------------------------------------
 
-    @Test fun aRowIsNeverShorterThanATouchTarget() {
+    @Test fun aRowIsNeverShorterThanTheSharedRowMinimum() {
         setPage()
-        for (title in listOf("字号", "默认音质", "网易云")) {
-            compose.onNodeWithText(title).assertHeightIsAtLeast(52.dp)
+        for (title in listOf("字号", "默认音质", "云村用户 8842", "酷狗")) {
+            compose.onNodeWithText(title).assertHeightIsAtLeast(RowSpec.minHeight)
         }
     }
 

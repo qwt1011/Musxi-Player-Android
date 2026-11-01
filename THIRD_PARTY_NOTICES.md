@@ -17,7 +17,8 @@
 | Kotlin 2.2.21、coroutines 1.10.2 | JetBrains，Apache-2.0 | app/src/main/assets/licenses/ |
 | AndroidX / Media3 1.8.0 | Android Open Source Project，Apache-2.0 | app/src/main/assets/licenses/AndroidX-Apache-2.0.txt |
 | Coil 3 3.3.0（io.coil-kt.coil3:coil-compose / coil-network-okhttp，封面图片加载；会引入 OkHttp 与 Okio，均为 Apache-2.0） | Coil Contributors，Apache-2.0 | 许可文本复用 app/src/main/assets/licenses/AndroidX-Apache-2.0.txt；OkHttp、Okio 同为 Apache-2.0，沿用同一文本 |
-| Haze 1.6.10（dev.chrisbanes.haze:haze，用于浮卡、菜单、Sheet 等控件层的液态玻璃材质，见 ui/components/Glass.kt；不支持实时模糊时退回实色） | Chris Banes，Apache-2.0 | 许可文本复用 app/src/main/assets/licenses/AndroidX-Apache-2.0.txt |
+| Haze 1.6.10（dev.chrisbanes.haze:haze，用于浮卡、菜单、Sheet 等控件层的液态玻璃材质，见 ui/components/Glass.kt；不支持实时模糊时退回实色） | Chris Banes，Apache-2.0 |
+| Backdrop 2.0.0-alpha03（io.github.kyant0:backdrop，Android 13 及以上为同一玻璃材质加折射，见 ui/components/Glass.kt） | Kyant，Apache-2.0 | 许可文本复用 app/src/main/assets/licenses/AndroidX-Apache-2.0.txt | 许可文本复用 app/src/main/assets/licenses/AndroidX-Apache-2.0.txt |
 | Guava 33.3.1-android / failureaccess 1.0.2 | Google / Guava Authors，Apache-2.0 | app/src/main/assets/licenses/Guava-LICENSE.txt、Guava-NOTICE.txt |
 | Gradle 8.13 wrapper | Gradle，Apache-2.0，构建工具 | wrapper 原文件头、app/src/main/assets/licenses/Gradle-Apache-2.0.txt |
 | JUnit 4.13.2 / Hamcrest 1.3 / JSON-java 20240303 | EPL-1.0 / BSD / Public Domain，仅宿主测试 | test-licenses/ |

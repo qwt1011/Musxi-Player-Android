@@ -37,6 +37,23 @@ class MeSheetTest {
         MeAccountsSheet(Accent.MIST, ThemeMode.LIGHT)
     }
 
+    @Test @Config(qualifiers = "w360dp-h340dp-xhdpi")
+    fun accountCardsDark() = capture("me_accounts_dark", dark = true, minCard = 0.30f) {
+        MeAccountsSheet(Accent.MIST, ThemeMode.DARK)
+    }
+
+    /** The three states at font scale 2.0: the status moves under the second line, nothing is dropped. */
+    @Test @Config(qualifiers = "w360dp-h900dp-xhdpi")
+    fun accountCardsLargeFont() = capture("me_accounts_largefont_light", dark = false, minCard = 0.10f) {
+        LargeFontBatch { MeAccountsSheet(Accent.MIST, ThemeMode.LIGHT) }
+    }
+
+    /** The common case: a member, a non-member and a platform not connected yet. */
+    @Test @Config(qualifiers = "w360dp-h340dp-xhdpi")
+    fun accountCardsCommon() = capture("me_accounts_common_light", dark = false, minCard = 0.30f) {
+        MeAccountsSheet(Accent.MIST, ThemeMode.LIGHT, common = true)
+    }
+
     @Test @Config(qualifiers = "w360dp-h800dp-xhdpi")
     fun darkModePage() = capture("me_dark_mode_page_light", dark = false, minCard = 0.08f) {
         MeDarkModeSheet(Accent.MIST, ThemeMode.LIGHT)

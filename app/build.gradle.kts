@@ -18,8 +18,8 @@ android {
         applicationId = "tech.musxi.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.2.0-alpha01"
+        versionCode = 5
+        versionName = "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
@@ -101,6 +101,9 @@ dependencies {
     debugImplementation(project(":platform-kugou")) // Isolated official web-login acceptance only.
     debugImplementation("androidx.compose.ui:ui-test-manifest")
     implementation("dev.chrisbanes.haze:haze:1.6.10") // Liquid-glass chrome (ui/components/Glass.kt), Apache-2.0.
+    // Refraction for that glass on Android 13+ (AGSL), Apache-2.0. 2.0.0 and later declare minCompileSdk 37,
+    // which AGP 8.13.2 rejects; alpha03 is the newest release that builds with compileSdk 36.
+    implementation("io.github.kyant0:backdrop:2.0.0-alpha03")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.17")
@@ -112,4 +115,7 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test:runner:1.5.2")
+    androidTestImplementation(project(":platform-kugou"))
+    androidTestImplementation(project(":platform-qq"))
+    androidTestImplementation(project(":platform-netease"))
 }

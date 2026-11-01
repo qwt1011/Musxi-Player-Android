@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -102,7 +103,8 @@ fun ShellBottomBar(
     Row(
         modifier
             .then(if (embedded) Modifier.fillMaxWidth() else widthModifier)
-            .height(HEIGHT)
+            // A minimum, not a fixed height: at large font sizes the row grows instead of clipping the label.
+            .heightIn(min = ShellTabRowHeight)
             .then(
                 if (embedded) Modifier else Modifier
                     .clip(if (pill) CircleShape else MaterialTheme.shapes.extraLarge)
@@ -132,7 +134,7 @@ fun ShellBottomBar(
  * bottom of the screen — the earlier 64/68 pairing inverted that and made the card look cramped
  * against a bar that felt half empty.
  */
-private val HEIGHT = 64.dp
+internal val ShellTabRowHeight = 64.dp
 
 @Composable
 private fun TabItem(

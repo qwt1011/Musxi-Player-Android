@@ -285,7 +285,9 @@ internal fun sheetGlass(): GlassScope {
  *
  * Placement: call it from the `overlay` slot of [GlassHost] (or any full-window layer), never inside
  * its `content`. The glass can only blur what the host recorded as page content, and the overlay is
- * what makes this fill the whole window, status bar included. Without a host it draws solid.
+ * what makes this fill the whole window, status bar included. Over the player, use the `overlay`
+ * of the player's [GlassLayer], so the glass shows the player and not the tab under it. Without a
+ * host it draws solid.
  *
  * Contract (callers rely on it, the body may change):
  * - [visible] shows or hides it. Showing slides it up from the bottom to [initialDetent] with

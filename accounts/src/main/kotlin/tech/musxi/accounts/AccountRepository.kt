@@ -134,6 +134,7 @@ class AccountRepository(context: Context) {
                         clearLibraryCache(platform)
                     synchronized(gate) {
                         if (!coordinator.isCurrent(platform, token)) return@verify
+                        driver.save(verified)
                         sessions[platform] = verified
                         coordinator.connected(platform, token, profile(platform, driver.identity(verified)))
                     }
@@ -638,9 +639,33 @@ class AccountRepository(context: Context) {
         return LibraryCacheIdentity(owner, state.generation, state.phase == AccountPhase.CONNECTED)
     }
 
+    /** Refresh display metadata without a login transition or a new account generation. */
+    fun refreshProfile(platform: Platform, result: (Result<Unit>) -> Unit = {}) {
+        val expected = states.value.getValue(platform)
+        if (expected.phase != AccountPhase.CONNECTED) {
+            main.post { result(Result.failure(LibraryUnavailable())) }; return
+        }
+        queue.execute {
+            val response = runCatching {
+                val driver = drivers.getValue(platform)
+                val verified = driver.verify(sessionSnapshot(platform, expected.generation))
+                val updated = profile(platform, driver.identity(verified))
+                synchronized(gate) {
+                    val current = states.value.getValue(platform)
+                    if (current.phase != AccountPhase.CONNECTED || current.generation != expected.generation ||
+                        updated.id != expected.profile?.id) throw LibraryUnavailable()
+                    driver.save(verified)
+                    sessions[platform] = verified
+                    check(coordinator.refreshProfile(platform, expected.generation, updated))
+                }
+            }
+            main.post { result(response) }
+        }
+    }
+
     private class LibraryUnavailable : java.io.IOException()
     private fun profile(platform: Platform, identity: Identity) = AccountProfile(platform, identity.id,
-        identity.name.filterNot { it.isISOControl() }.take(80))
+        identity.name.filterNot { it.isISOControl() }.take(80), AvatarPolicy.sanitize(platform, identity.avatarUrl))
 
     private fun fail(platform: Platform, token: Long, error: AccountError) {
         synchronized(gate) { coordinator.fail(platform, token, error) }

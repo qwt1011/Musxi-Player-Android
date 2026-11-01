@@ -11,6 +11,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import tech.musxi.player.ui.shell.ShellTabRowHeight
 
 /** The mini row's own measures. MiniPlayer lays itself out with them, and the cover travels from them. */
 internal val MiniRowHeight = 64.dp
@@ -33,9 +34,9 @@ internal class PlayerFrame(
 ) {
     val full = Rect(0f, 0f, width, height)
 
-    // Unmeasured, the dock's structure gives the row: 8dp spacer, 64dp tab bar and 1dp divider below it.
+    // Unmeasured, the dock's structure gives the row: 8dp spacer, the tab bar's minimum height and 1dp divider below it.
     val mini: Rect = measuredMini ?: with(density) {
-        val bottom = height - navBottom - 8.dp.toPx() - 64.dp.toPx() - 1.dp.toPx()
+        val bottom = height - navBottom - 8.dp.toPx() - ShellTabRowHeight.toPx() - 1.dp.toPx()
         Rect(20.dp.toPx(), bottom - MiniRowHeight.toPx(), width - 20.dp.toPx(), bottom)
     }
 

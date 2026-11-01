@@ -52,17 +52,27 @@ public final class KugouApi {
 
     public static final class Session {
         public final String token, userId, nickname;
+        /** Optional raw profile image address; blank or oversized values become null. */
+        public final String avatarUrl;
         /** True only when the authenticated profile response echoed matching account IDs. */
         public final boolean accountIdEchoed;
         public Session(String token, String userId, String nickname) {
-            this(token, userId, nickname, false);
+            this(token, userId, nickname, null, false);
+        }
+        public Session(String token, String userId, String nickname, String avatarUrl) {
+            this(token, userId, nickname, avatarUrl, false);
         }
         private Session(String token, String userId, String nickname, boolean accountIdEchoed) {
+            this(token, userId, nickname, null, accountIdEchoed);
+        }
+        private Session(String token, String userId, String nickname, String avatarUrl,
+                boolean accountIdEchoed) {
             if (!validToken(token) || !validUserId(userId))
                 throw new IllegalArgumentException("登录凭证无效");
             this.token = token;
             this.userId = userId;
             this.nickname = cleanNickname(nickname);
+            this.avatarUrl = cleanAvatar(avatarUrl);
             this.accountIdEchoed = accountIdEchoed;
         }
     }
@@ -423,7 +433,15 @@ public final class KugouApi {
             appendSchema(data, "data", 0, new int[] {0}, diagnostic);
             throw new ApiException("identity", "酷狗账号身份校验未通过，请重新登录", diagnostic.toString());
         }
-        return new Session(session.token, session.userId, nickname, found);
+        String avatarUrl = avatarFromData(data);
+        return new Session(session.token, session.userId, nickname,
+                avatarUrl == null ? session.avatarUrl : avatarUrl, found);
+    }
+
+    private static String avatarFromData(JSONObject data) {
+        Object value = data.opt("pic");
+        if (!(value instanceof String)) return null;
+        return cleanAvatar((String) value);
     }
 
     private static boolean validProfile(JSONObject data) {
@@ -692,6 +710,13 @@ public final class KugouApi {
         if (nickname == null || nickname.isEmpty()) return "酷狗用户";
         String result = nickname.replaceAll("[\\p{Cc}\\p{Cf}]", "");
         return result.length() > 120 ? result.substring(0, 120) : result;
+    }
+    private static String cleanAvatar(String avatarUrl) {
+        if (avatarUrl == null) return null;
+        String clean = avatarUrl.trim();
+        if (clean.isEmpty() || clean.length() > 2048
+                || clean.matches("(?s).*[\\p{Cc}\\p{Cf}].*")) return null;
+        return clean;
     }
     private static void requireKey(String key) throws IOException {
         if (!validKey(key)) throw error("protocol", "登录请求标识无效，请重新发起登录");

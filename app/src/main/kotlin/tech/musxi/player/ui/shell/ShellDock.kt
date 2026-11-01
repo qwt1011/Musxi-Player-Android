@@ -5,8 +5,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,12 +17,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
+import tech.musxi.player.ui.components.GlassStyle
+import tech.musxi.player.ui.components.glass
+import tech.musxi.player.ui.components.sheetGlass
 import tech.musxi.player.ui.player.MiniPlayer
 import tech.musxi.player.ui.player.MiniPlayerUi
 import tech.musxi.player.ui.player.MiniRowHeight
@@ -66,20 +65,10 @@ fun ShellDock(
     LaunchedEffect(notice) { if (notice != null) lastNotice.value = notice }
     val dark = cs.background.isDarkSurface()
     val shape = MaterialTheme.shapes.extraLarge
-    // Light: a white card that floats with a soft, neutral black shadow. Dark: no shadow,
-    // a hairline outline instead.
-    val container = Modifier.fillMaxWidth()
-        .then(
-            if (dark) Modifier else Modifier.shadow(
-                elevation = 12.dp, shape = shape,
-                ambientColor = Color.Black.copy(alpha = 0.06f),
-                spotColor = Color.Black.copy(alpha = 0.12f),
-                clip = false,
-            ),
-        )
-        .clip(shape)
-        .background(dockColor())
-        .then(if (dark) Modifier.border(1.dp, cs.outlineVariant.copy(alpha = 0.5f), shape) else Modifier)
+    // Regular glass over the page (spec section 3): blur, tint, sheen, highlight stroke and shadow
+    // all come from Modifier.glass. The shell mounts a GlassHost; outside one (the design sheets)
+    // sheetGlass() is the solid fallback in the theme's own colours.
+    val container = Modifier.fillMaxWidth().glass(sheetGlass(), shape, GlassStyle.REGULAR)
     Column(container) {
         AnimatedVisibility(
             visible = notice != null,
@@ -128,8 +117,9 @@ fun ShellDock(
 }
 
 /**
- * Container colour used when the dock replaces both capsules: pure white in light, the raised dark
- * surface in dark. No accent is mixed in.
+ * Solid dock colour: pure white in light, the raised dark surface in dark. No accent is mixed in.
+ * The dock container itself is glass now; this is the colour the player surface grows out of as it
+ * expands and the fill of the notice pill, so both keep matching the solid fallback of the glass.
  */
 @Composable
 fun dockColor(): Color {

@@ -70,18 +70,25 @@ public final class NeteaseApi {
         }
     }
     public static final class Session {
-        public final String userId, nickname;
+        public final String userId, nickname, avatarUrl;
         private final Map<String,String> cookies;
         private Session(Map<String,String> cookies, String userId, String nickname) throws IOException {
+            this(cookies, userId, nickname, null);
+        }
+        private Session(Map<String,String> cookies, String userId, String nickname, String avatarUrl) throws IOException {
             this.cookies = immutable(validateCookies(cookies));
             if (!userId.isEmpty() && !validId(userId)) throw error("identity", "网易云账号标识无效");
             this.userId = userId;
             this.nickname = cleanName(nickname);
+            this.avatarUrl = cleanAvatarUrl(avatarUrl);
         }
         /** Encrypted storage only: never render or log this object. */
         public JSONObject toJson() throws IOException {
             if (!validId(userId)) throw error("storage", "只能保存已验证的网易云会话");
-            return object("cookies", new JSONObject(cookies), "userId", userId, "nickname", nickname);
+            JSONObject saved = object("cookies", new JSONObject(cookies), "userId", userId, "nickname", nickname);
+            try { saved.put("avatarUrl", avatarUrl == null ? JSONObject.NULL : avatarUrl); }
+            catch (JSONException invalid) { throw error("storage", "本机网易云会话格式无效"); }
+            return saved;
         }
         public static Session fromJson(JSONObject json) throws IOException {
             if (json == null || !(json.opt("userId") instanceof String) || !validId(json.optString("userId"))
@@ -95,7 +102,8 @@ public final class NeteaseApi {
                 if (!(source.opt(name) instanceof String)) throw error("storage", "本机会话字段无效");
                 cookies.put(name, source.optString(name));
             }
-            return new Session(cookies, json.optString("userId"), json.optString("nickname"));
+            return new Session(cookies, json.optString("userId"), json.optString("nickname"),
+                avatarValue(json.opt("avatarUrl")));
         }
     }
     public static final class Poll {
@@ -180,7 +188,7 @@ public final class NeteaseApi {
         } while (fake.equals(original));
         Map<String,String> cookies = new LinkedHashMap<>(session.cookies);
         cookies.put("MUSIC_U", fake);
-        Session probe = new Session(cookies, session.userId, session.nickname);
+        Session probe = new Session(cookies, session.userId, session.nickname, session.avatarUrl);
         Response response = call(STATUS, new JSONObject(), probe.cookies);
         int code = responseCode(response.body);
         if (code == 301 || code == 302) return ProbeResult.REJECTED;
@@ -299,7 +307,9 @@ public final class NeteaseApi {
         if (!validId(id) || !id.equals(accountId) || (!session.userId.isEmpty() && !id.equals(session.userId)))
             throw error("identity", "网易云返回的账号身份未匹配");
         if (!(profile.opt("nickname") instanceof String)) throw error("identity", "网易云未返回有效账号资料");
-        return new Session(session.cookies, id, profile.optString("nickname"));
+        String avatarUrl = avatarValue(profile.opt("avatarUrl"));
+        return new Session(session.cookies, id, profile.optString("nickname"),
+            avatarUrl == null ? session.avatarUrl : avatarUrl);
     }
     static Map<String,String> weapi(String text, String secret) throws IOException {
         if (!secret.matches("[A-Za-z0-9]{16}")) throw error("protocol", "请求密钥格式无效");
@@ -385,6 +395,15 @@ public final class NeteaseApi {
         if (value == null) return "网易云用户";
         String clean = value.replaceAll("[\\p{Cc}\\p{Cf}]", "").trim();
         return clean.isEmpty() ? "网易云用户" : clean.substring(0, Math.min(120, clean.length()));
+    }
+    private static String avatarValue(Object raw) {
+        return raw instanceof String ? cleanAvatarUrl((String)raw) : null;
+    }
+    private static String cleanAvatarUrl(String value) {
+        if (value == null) return null;
+        String clean = value.trim();
+        if (clean.isEmpty() || clean.length() > 2048 || clean.matches("(?s).*[\\p{Cc}\\p{Cf}].*")) return null;
+        return clean;
     }
     private static String scalar(JSONObject object, String key) {
         Object value = object.opt(key); return value instanceof String || value instanceof Number ? String.valueOf(value) : "";

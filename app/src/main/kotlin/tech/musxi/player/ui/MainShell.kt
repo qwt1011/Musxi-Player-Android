@@ -50,8 +50,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.rememberCoroutineScope
 import tech.musxi.player.ui.nav.NavStackHost
@@ -62,8 +67,17 @@ import tech.musxi.core.library.LibrarySource
 import tech.musxi.core.playback.SourceSelectionPhase
 import tech.musxi.accounts.NeteaseWebLogin
 import tech.musxi.player.MusxiApplication
-import tech.musxi.player.ui.account.AccountScreen
+import tech.musxi.player.ui.account.AccountPageActions
 import tech.musxi.player.ui.account.AccountViewModel
+import tech.musxi.player.ui.components.GlassHost
+import tech.musxi.player.ui.components.GlassLayer
+import tech.musxi.player.ui.me.lyricsColorModeOf
+import tech.musxi.player.ui.me.meUiOf
+import tech.musxi.player.ui.me.translationPreferenceOf
+import tech.musxi.player.ui.shell.MeRootKey
+import tech.musxi.player.ui.shell.MeTab
+import tech.musxi.player.ui.shell.MeTabActions
+import tech.musxi.player.ui.shell.cacheClearNotice
 import tech.musxi.player.ui.account.UpdateActions
 import tech.musxi.player.ui.account.aboutUpdateUiOf
 import tech.musxi.player.ui.account.isTrustedReleasePage
@@ -118,6 +132,7 @@ import tech.musxi.player.ui.shell.NoticeState
 import tech.musxi.player.ui.shell.ShellDock
 import tech.musxi.player.ui.shell.ShellTab
 import tech.musxi.player.ui.shell.dockNoticeOf
+import tech.musxi.player.ui.theme.LocalMusxi
 import tech.musxi.player.ui.theme.Space
 import tech.musxi.player.ui.theme.SystemBarIcons
 import tech.musxi.player.ui.theme.displayName
@@ -134,6 +149,10 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
     // Non-blocking feedback is shown as an in-app pill, not a system Toast.
     val notice = remember { NoticeState() }
     val accounts by app.accounts.states.collectAsStateWithLifecycle()
+    // Persisted preferences and the cache measurement behind the "我的" page. MainActivity reads the
+    // theme mode from the same settings flow; the transparency switch is read here for the glass.
+    val settings by app.settings.collectAsStateWithLifecycle()
+    val cacheState by app.cache.state.collectAsStateWithLifecycle()
     val libraryViewModel: LibraryViewModel = viewModel { LibraryViewModel(app) }
     val accountViewModel: AccountViewModel = viewModel { AccountViewModel(app.accounts) }
     val searchViewModel: SearchViewModel = viewModel {
@@ -159,6 +178,10 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
     // hoisted so both survive switching tabs.
     val libraryNav = rememberNavStackState(root = "library", maxDepth = 2)
     val libraryList = rememberLazyListState()
+    // The "我的" tab's stack: the page itself, then one sub-page (深色模式 or a platform's account).
+    val meNav = rememberNavStackState(root = MeRootKey, maxDepth = 2)
+    // The "我的" root page's scroll, hoisted like the library list so reselecting the tab can reach it.
+    val meScroll = androidx.compose.foundation.rememberScrollState()
     val shellScope = rememberCoroutineScope()
     // A restored stack can outlive the view model's playlist (process death): drop the empty page.
     LaunchedEffect(Unit) {
@@ -538,6 +561,79 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
             connect(platform)
         }
     }
+    // Settings are written on the IO thread, one at a time in the order they were tapped. The page
+    // shows the stored value and keeps no copy, so a save that fails leaves the switch where it was;
+    // the notice says why nothing changed.
+    val settingsWrites = remember { Mutex() }
+    fun saveSetting(change: () -> Unit) {
+        shellScope.launch {
+            val saved = settingsWrites.withLock {
+                withContext(Dispatchers.IO) { runCatching { change() }.isSuccess }
+            }
+            if (!saved) notice.show("设置没能保存，请稍后重试")
+        }
+    }
+    val meTabActions = MeTabActions(
+        onSetAutoSwitchSource = { on -> saveSetting { app.settingsRepository.setAutoSwitchSource(on) } },
+        onSetRelaxDuration = { on -> saveSetting { app.settingsRepository.setRelaxSourceDuration(on) } },
+        onSetFollowCover = { on -> saveSetting { app.settingsRepository.setLyricsColorMode(lyricsColorModeOf(on)) } },
+        onSetShowTranslation = { on ->
+            saveSetting { app.settingsRepository.setLyricsTranslationPreference(translationPreferenceOf(on)) }
+        },
+        onSetTransparency = { on -> saveSetting { app.settingsRepository.setTransparencyEnabled(on) } },
+        onSetThemeMode = { mode -> saveSetting { app.settingsRepository.setThemeMode(mode) } },
+        // MeTab has already asked. A clear that fails for one kind still clears the others, so the
+        // sentence is built from what the backend reports instead of always saying it worked.
+        onClearCache = { app.cache.clear { result -> notice.show(cacheClearNotice(result)) } },
+        onComingSoon = { notice.show("即将推出") },
+    )
+    // The account sub-page keeps the flows the account list had: official-app connect, the Netease
+    // web window, re-login after clearing, re-verify and sign-out.
+    val accountPageActions = AccountPageActions(
+        onConnect = ::connect,
+        onCancel = { platform ->
+            // Cancelling only moves the account state; the web window must be
+            // closed too, or it stays on screen with nothing behind it.
+            if (platform == Platform.NETEASE) closeNeteaseWeb()
+            accountViewModel.cancel(platform)
+        },
+        onRetry = accountViewModel::retry,
+        onRelogin = { platform ->
+            // An expired session is cleared first, then a new login starts by
+            // itself once the clearing has landed; one tap, not two.
+            if (platform == Platform.NETEASE) closeNeteaseWeb()
+            reconnectAfterClear = platform
+            accountViewModel.relogin(platform)
+        },
+        onReverify = accountViewModel::reverify,
+        onSignOut = { platform ->
+            if (platform == Platform.NETEASE) closeNeteaseWeb()
+            accountViewModel.disconnect(platform)
+        },
+        onConnectNeteaseScanner = if (android.os.Build.VERSION.SDK_INT >= 29) {
+            {
+                accountViewModel.connectNeteaseScanner { intent ->
+                    runCatching { context.startActivity(intent) }
+                }
+                notice.show("登录二维码已存入相册，请在网易云扫一扫里从相册选择")
+            }
+        } else null,
+    )
+    // The accent has no stored field yet (AppSettings has none), so the page shows the theme's own.
+    val accent = LocalMusxi.current.accent
+    val meUi = remember(accounts, settings, accent, cacheState) {
+        meUiOf(
+            // Netease, QQ, Kugou: the order of the old account screen, not the enum's.
+            accounts = listOf(Platform.NETEASE, Platform.QQ, Platform.KUGOU).mapNotNull { accounts[it] },
+            settings = settings,
+            accent = accent,
+            cache = cacheState,
+        )
+    }
+    // Opening the tab measures the cache again, so the storage row is never an old number.
+    LaunchedEffect(tab == ShellTab.ME) {
+        if (tab == ShellTab.ME) app.cache.refresh()
+    }
     fun submitQueueCommand(command: ((Result<Unit>) -> Unit) -> Unit) {
         if (!queueUi.editing) return
         queueBusy = true
@@ -591,12 +687,15 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
     // reports its own backdrop, composed later, and wins.
     if (!playerCovering) SystemBarIcons(MaterialTheme.colorScheme.background)
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Box(Modifier.fillMaxSize()) {
-            // The dock floats over the content: the page is full height and scrolls underneath it,
-            // so it no longer sits on a strip of bare background. The inset is measured, not
-            // guessed, because the dock changes height when the mini player appears.
-            var dockHeight by remember { mutableIntStateOf(0) }
-            val contentInset = with(LocalDensity.current) { dockHeight.toDp() } + 16.dp
+        // The dock floats over the content: the page is full height and scrolls underneath it,
+        // so it no longer sits on a strip of bare background. The inset is measured, not
+        // guessed, because the dock changes height when the mini player appears.
+        var dockHeight by remember { mutableIntStateOf(0) }
+        val contentInset = with(LocalDensity.current) { dockHeight.toDp() } + 16.dp
+        // The pages are what the glass records and blurs; the dock, player, sheets and notice are
+        // the host's overlay (spec section 3). The overlay is composed after the pages, so its back
+        // handlers keep winning over the pages' own, as they did in the one Box before.
+        val pages: @Composable BoxScope.() -> Unit = {
             // Everything below the shell inherits the accent of the track that is playing.
             CompositionLocalProvider(LocalNowPlayingAccent provides nowPlaying) {
                 Box(
@@ -701,44 +800,28 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
                             loadPlaylists = { platform, done -> app.playlists.listWritable(platform, done) },
                             onAddToPlaylist = ::addSongToPlaylist,
                         )
-                        ShellTab.ME -> AccountScreen(
-                            state = accountState,
+                        // The "我的" page and what it opens (深色模式, a platform's account) live on this
+                        // tab's own stack, like the library's playlist.
+                        ShellTab.ME -> MeTab(
+                            nav = meNav,
+                            scrollState = meScroll,
+                            ui = meUi,
+                            accountRows = accountState.rows,
                             dark = dark,
+                            actions = meTabActions,
+                            accountActions = accountPageActions,
                             appVersion = appVersion,
                             update = aboutUpdate,
                             updateActions = updateActions,
                             bottomInset = contentInset,
-                            onConnect = ::connect,
-                            onCancel = { platform ->
-                                // Cancelling only moves the account state; the web window must be
-                                // closed too, or it stays on screen with nothing behind it.
-                                if (platform == Platform.NETEASE) closeNeteaseWeb()
-                                accountViewModel.cancel(platform)
-                            },
-                            onRetry = accountViewModel::retry,
-                            onRelogin = { platform ->
-                                // An expired session is cleared first, then a new login starts by
-                                // itself once the clearing has landed; one tap, not two.
-                                if (platform == Platform.NETEASE) closeNeteaseWeb()
-                                reconnectAfterClear = platform
-                                accountViewModel.relogin(platform)
-                            },
-                            onReverify = accountViewModel::reverify,
-                            onSignOut = { platform ->
-                                if (platform == Platform.NETEASE) closeNeteaseWeb()
-                                accountViewModel.disconnect(platform)
-                            },
-                            onConnectNeteaseScanner = if (android.os.Build.VERSION.SDK_INT >= 29) {
-                                {
-                                    accountViewModel.connectNeteaseScanner { intent ->
-                                        runCatching { context.startActivity(intent) }
-                                    }
-                                    notice.show("登录二维码已存入相册，请在网易云扫一扫里从相册选择")
-                                }
-                            } else null,
+                            backEnabled = !playerActive,
                         )
                     }
                 }
+            }
+        }
+        val chrome: @Composable BoxScope.() -> Unit = {
+            CompositionLocalProvider(LocalNowPlayingAccent provides nowPlaying) {
                 // One dock instead of two stacked capsules: the chrome shares the page's margins,
                 // and its hairline is the same separator the lists use.
                 Column(
@@ -767,6 +850,10 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
                                 tab = picked
                             } else if (picked == ShellTab.LIBRARY) {
                                 libraryNav.reselect { shellScope.launch { libraryList.animateScrollToItem(0) } }
+                            } else if (picked == ShellTab.ME) {
+                                // On a sub-page: back to the root page. On the root page: back to
+                                // its top. The scroll position is kept in between.
+                                meNav.reselect { shellScope.launch { meScroll.animateScrollTo(0) } }
                             }
                         },
                         badges =if (aboutUpdate.badge) setOf(ShellTab.ME) else emptySet(),
@@ -809,286 +896,294 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
                     else -> playerProgress.collapse()
                 }
             }
-            // The full player covers the shell rather than navigating to a new destination: it is a
-            // layer over the same state, and pressing back must return to the tab underneath.
-            PlayerSurface(
-                progress = playerProgress,
-                mini = miniPlayer,
-                ui = playerUi,
-                dark = dark,
-                miniRect = miniRect,
-                nowPlaying = nowPlaying,
-                previous = previousCover,
-                next = nextCover,
-                coverShown = !lyricsMode,
-                onPlayPause = { app.playback.toggle() },
-                onPrevious = { app.playback.previous() },
-                onNext = { app.playback.next() },
-            ) { surface ->
-                FullPlayer(
+            val playerLayer: @Composable BoxScope.() -> Unit = {
+                // The full player covers the shell rather than navigating to a new destination: it is a
+                // layer over the same state, and pressing back must return to the tab underneath.
+                PlayerSurface(
+                    progress = playerProgress,
+                    mini = miniPlayer,
                     ui = playerUi,
                     dark = dark,
-                    // Going down also closes the sheets; the lyrics mode is reset once docked.
-                    onCollapse = { playerProgress.collapse() },
+                    miniRect = miniRect,
+                    nowPlaying = nowPlaying,
+                    previous = previousCover,
+                    next = nextCover,
+                    coverShown = !lyricsMode,
                     onPlayPause = { app.playback.toggle() },
                     onPrevious = { app.playback.previous() },
                     onNext = { app.playback.next() },
-                    onSeek = { fraction ->
-                        val duration = playback.durationMs
-                        if (duration > 0) {
-                            app.playback.seekTo((duration * fraction).toLong())
-                        }
-                    },
-                    onShowLyrics = {
-                        if (lyricsMode) {
-                            lyricsMode = false
-                            lyricsBrowsing = false
-                        } else {
-                            lyricsMode = true
-                        }
-                    },
-                    favorite = favorite,
-                    onToggleFavorite = {
-                        val song = currentSong
-                        val ui = favorite
-                        if (song != null && ui != null) {
-                            if (!ui.enabled) {
-                                notice.show("当前账号不能修改收藏")
+                ) { surface ->
+                    FullPlayer(
+                        ui = playerUi,
+                        dark = dark,
+                        // Going down also closes the sheets; the lyrics mode is reset once docked.
+                        onCollapse = { playerProgress.collapse() },
+                        onPlayPause = { app.playback.toggle() },
+                        onPrevious = { app.playback.previous() },
+                        onNext = { app.playback.next() },
+                        onSeek = { fraction ->
+                            val duration = playback.durationMs
+                            if (duration > 0) {
+                                app.playback.seekTo((duration * fraction).toLong())
+                            }
+                        },
+                        onShowLyrics = {
+                            if (lyricsMode) {
+                                lyricsMode = false
+                                lyricsBrowsing = false
                             } else {
-                                val now = SystemClock.elapsedRealtime()
-                                val existing = favoriteIntent
-                                // A second tap on the same song replaces the first: the user's last
-                                // word wins, with a fresh attempt budget and a fresh time limit.
-                                favoriteIntent = if (existing != null && existing.song.key == song.key) {
-                                    existing.copy(liked = !ui.liked, attempts = 0, startedAtMs = now)
+                                lyricsMode = true
+                            }
+                        },
+                        favorite = favorite,
+                        onToggleFavorite = {
+                            val song = currentSong
+                            val ui = favorite
+                            if (song != null && ui != null) {
+                                if (!ui.enabled) {
+                                    notice.show("当前账号不能修改收藏")
                                 } else {
-                                    FavoriteIntent(song, !ui.liked, startedAtMs = now)
+                                    val now = SystemClock.elapsedRealtime()
+                                    val existing = favoriteIntent
+                                    // A second tap on the same song replaces the first: the user's last
+                                    // word wins, with a fresh attempt budget and a fresh time limit.
+                                    favoriteIntent = if (existing != null && existing.song.key == song.key) {
+                                        existing.copy(liked = !ui.liked, attempts = 0, startedAtMs = now)
+                                    } else {
+                                        FavoriteIntent(song, !ui.liked, startedAtMs = now)
+                                    }
                                 }
                             }
-                        }
-                    },
-                    onShowQueue = { showQueue = true },
-                    lyrics = if (lyricsMode) lyricsUi else null,
-                    onSeekLine = { timeMs ->
-                        // One step, like the PC build: the tap is the jump. It also ends browsing,
-                        // because the user has just said where they want to be.
-                        app.playback.seekTo(timeMs)
-                        lyricsBrowsing = false
-                    },
-                    onToggleTranslation = { translationOverride = !showTranslation },
-                    onRefreshTranslation = { app.lyrics.refreshTranslation() },
-                    onReturnToCurrent = { lyricsBrowsing = false },
-                    onRetryLyrics = { app.lyrics.refresh() },
-                    onReloginLyrics = {
-                        // Passing the account back through the player would leave the user in a
-                        // mode that cannot succeed; take them where the fix actually lives.
-                        showPlayer = false
-                        lyricsMode = false
-                        tab = ShellTab.ME
-                    },
-                    onUserScrollLyrics = {
-                        lyricsBrowsing = true
-                        lyricsTouchedAt = SystemClock.elapsedRealtime()
-                    },
-                    onShowPlayMode = { showPlayMode = true },
-                    onShowQuality = {
-                        showQuality = true
-                    },
-                    onShowOutput = { showOutput = true },
-                    playModeMenuOpen = showPlayMode,
-                    onDismissPlayMode = { showPlayMode = false },
-                    onSelectPlayMode = { mode ->
-                        app.playback.setShuffleEnabled(mode.shuffle)
-                        app.playback.setRepeatMode(mode.repeat)
-                        showPlayMode = false
-                    },
-                    qualityMenu = if (showQuality) {
-                        QualityMenuUi(
-                            choices = qualityOptions?.options.orEmpty().map {
-                                MenuChoice(it.id, it.name, it.id == qualityOptions?.current)
-                            },
-                            message = when {
-                                qualityLoading -> "正在获取可用音质…"
-                                qualityError -> "获取音质失败，请稍后重试"
-                                qualityOptions?.options.isNullOrEmpty() -> "暂无可确认的可用音质"
-                                else -> null
-                            },
-                            loading = qualityLoading,
-                        )
-                    } else null,
-                    onDismissQuality = { showQuality = false },
-                    onSelectQuality = { id ->
-                        showQuality = false
-                        app.playback.setQuality(id) { result ->
-                            if (result.isFailure) notice.show("音质切换失败，已保留原音质")
-                        }
-                    },
-                    outputMenu = if (showOutput) {
-                        OutputMenuUi(
-                            choices = outputs.devices.map {
-                                MenuChoice(it.id, it.displayName(), it.selected, it.type.menuIcon())
-                            },
-                            message = if (outputs.devices.isEmpty()) "暂无可确认的输出设备" else null,
-                        )
-                    } else null,
-                    onDismissOutput = { showOutput = false },
-                    onSelectOutput = { id ->
-                        app.playback.selectOutput(id) { result ->
-                            val error = result.exceptionOrNull() as? tech.musxi.playback.OutputSelectionException
-                            if (error?.category == tech.musxi.playback.OutputFailure.SYSTEM_SWITCHER_REQUIRED) {
-                                showOutput = false
-                                openOutputSwitcher()
-                            } else if (result.isFailure) {
-                                notice.show("输出切换未完成，请使用系统媒体输出")
+                        },
+                        onShowQueue = { showQueue = true },
+                        lyrics = if (lyricsMode) lyricsUi else null,
+                        onSeekLine = { timeMs ->
+                            // One step, like the PC build: the tap is the jump. It also ends browsing,
+                            // because the user has just said where they want to be.
+                            app.playback.seekTo(timeMs)
+                            lyricsBrowsing = false
+                        },
+                        onToggleTranslation = { translationOverride = !showTranslation },
+                        onRefreshTranslation = { app.lyrics.refreshTranslation() },
+                        onReturnToCurrent = { lyricsBrowsing = false },
+                        onRetryLyrics = { app.lyrics.refresh() },
+                        onReloginLyrics = {
+                            // Passing the account back through the player would leave the user in a
+                            // mode that cannot succeed; take them where the fix actually lives.
+                            showPlayer = false
+                            lyricsMode = false
+                            tab = ShellTab.ME
+                        },
+                        onUserScrollLyrics = {
+                            lyricsBrowsing = true
+                            lyricsTouchedAt = SystemClock.elapsedRealtime()
+                        },
+                        onShowPlayMode = { showPlayMode = true },
+                        onShowQuality = {
+                            showQuality = true
+                        },
+                        onShowOutput = { showOutput = true },
+                        playModeMenuOpen = showPlayMode,
+                        onDismissPlayMode = { showPlayMode = false },
+                        onSelectPlayMode = { mode ->
+                            app.playback.setShuffleEnabled(mode.shuffle)
+                            app.playback.setRepeatMode(mode.repeat)
+                            showPlayMode = false
+                        },
+                        qualityMenu = if (showQuality) {
+                            QualityMenuUi(
+                                choices = qualityOptions?.options.orEmpty().map {
+                                    MenuChoice(it.id, it.name, it.id == qualityOptions?.current)
+                                },
+                                message = when {
+                                    qualityLoading -> "正在获取可用音质…"
+                                    qualityError -> "获取音质失败，请稍后重试"
+                                    qualityOptions?.options.isNullOrEmpty() -> "暂无可确认的可用音质"
+                                    else -> null
+                                },
+                                loading = qualityLoading,
+                            )
+                        } else null,
+                        onDismissQuality = { showQuality = false },
+                        onSelectQuality = { id ->
+                            showQuality = false
+                            app.playback.setQuality(id) { result ->
+                                if (result.isFailure) notice.show("音质切换失败，已保留原音质")
+                            }
+                        },
+                        outputMenu = if (showOutput) {
+                            OutputMenuUi(
+                                choices = outputs.devices.map {
+                                    MenuChoice(it.id, it.displayName(), it.selected, it.type.menuIcon())
+                                },
+                                message = if (outputs.devices.isEmpty()) "暂无可确认的输出设备" else null,
+                            )
+                        } else null,
+                        onDismissOutput = { showOutput = false },
+                        onSelectOutput = { id ->
+                            app.playback.selectOutput(id) { result ->
+                                val error = result.exceptionOrNull() as? tech.musxi.playback.OutputSelectionException
+                                if (error?.category == tech.musxi.playback.OutputFailure.SYSTEM_SWITCHER_REQUIRED) {
+                                    showOutput = false
+                                    openOutputSwitcher()
+                                } else if (result.isFailure) {
+                                    notice.show("输出切换未完成，请使用系统媒体输出")
+                                }
+                            }
+                        },
+                        onOpenSystemOutput = {
+                            showOutput = false
+                            openOutputSwitcher()
+                        },
+                        moreMenu = if (showMore) {
+                            MoreMenuUi(
+                                artist = playback.artist,
+                                album = playback.album,
+                                sleepRemaining = sleepRemaining,
+                            )
+                        } else null,
+                        sleepTimerActive = sleepDeadline != null,
+                        onShowMore = {
+                            // Read the clock now so the first frame of the menu is not a stale countdown.
+                            sleepNow = SystemClock.elapsedRealtime()
+                            showMore = true
+                        },
+                        onDismissMore = { showMore = false },
+                        onMoreAction = ::handleMoreAction,
+                        // The song is the queue original, the same one the heart acts on. Without a
+                        // current song the menu has no "加入歌单" row.
+                        loadPlaylists = if (currentSong != null) {
+                            { done -> app.playlists.listWritable(currentSong.key.platform, done) }
+                        } else null,
+                        onAddToPlaylist = if (currentSong != null) {
+                            { target -> addSongToPlaylist(currentSong, target) }
+                        } else null,
+                        onMatchLyrics = if (currentSong != null) {
+                            { showLyricsMatch = true }
+                        } else null,
+                        onFindSources = if (currentSong != null) {
+                            { findSources() }
+                        } else null,
+                        surface = surface,
+                    )
+                }
+            }
+            val overPlayer: @Composable BoxScope.() -> Unit = {
+                if (playerActive) {
+                    // The queue sits above the player for the same reason the source panel does: it is
+                    // an interruption of the page, not a destination of its own.
+                    if (showQueue) {
+                        Box(
+                            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f))
+                                .clickable(interactionSource = null, indication = null) { showQueue = false },
+                        ) {
+                            Column(
+                                Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.Bottom,
+                            ) {
+                                QueuePanel(
+                                    ui = queueUi,
+                                    // The sheet itself must swallow taps, or every touch would reach
+                                    // the scrim behind it and close the queue.
+                                    modifier = Modifier.clickable(interactionSource = null, indication = null) {},
+                                    onSelect = { index -> submitQueueCommand { done ->
+                                        app.playback.jumpToQueueIndex(index, queue.revision, done)
+                                    } },
+                                    onRemove = { index ->
+                                        // The revision travels with the command: a stale edit is
+                                        // rejected by the service rather than applied to a queue that
+                                        // has moved on.
+                                        submitQueueCommand { done -> app.playback.removeQueueItem(index, queue.revision, done) }
+                                    },
+                                    onMove = { from, to, expectedRevision ->
+                                        // Same revision rule as the other edits: if the queue changed
+                                        // while the finger was down, the service refuses rather than
+                                        // applying a move computed against a list that no longer exists.
+                                        submitQueueCommand { done -> app.playback.moveQueueItem(from, to, expectedRevision, done) }
+                                    },
+                                    onClear = { submitQueueCommand { done -> app.playback.clearQueue(queue.revision, done) } },
+                                    onClose = { showQueue = false },
+                                )
                             }
                         }
-                    },
-                    onOpenSystemOutput = {
-                        showOutput = false
-                        openOutputSwitcher()
-                    },
-                    moreMenu = if (showMore) {
-                        MoreMenuUi(
-                            title = playback.title.ifBlank { "未在播放" },
-                            artist = playback.artist,
-                            album = playback.album,
-                            sleepRemaining = sleepRemaining,
+                    }
+                    // Same layering as the queue: a sheet over the player, closed by the scrim or back.
+                    if (showLyricsMatch) {
+                        val match by app.lyricsMatch.state.collectAsStateWithLifecycle()
+                        val matchUi = lyricsMatchUiOf(
+                            match,
+                            title = currentSong?.title ?: playback.title,
+                            artist = currentSong?.artists?.joinToString(" / ") ?: playback.artist,
                         )
-                    } else null,
-                    sleepTimerActive = sleepDeadline != null,
-                    onShowMore = {
-                        // Read the clock now so the first frame of the menu is not a stale countdown.
-                        sleepNow = SystemClock.elapsedRealtime()
-                        showMore = true
-                    },
-                    onDismissMore = { showMore = false },
-                    onMoreAction = ::handleMoreAction,
-                    // The song is the queue original, the same one the heart acts on. Without a
-                    // current song the menu has no "加入歌单" row.
-                    loadPlaylists = if (currentSong != null) {
-                        { done -> app.playlists.listWritable(currentSong.key.platform, done) }
-                    } else null,
-                    onAddToPlaylist = if (currentSong != null) {
-                        { target -> addSongToPlaylist(currentSong, target) }
-                    } else null,
-                    onMatchLyrics = if (currentSong != null) {
-                        { showLyricsMatch = true }
-                    } else null,
-                    onFindSources = if (currentSong != null) {
-                        { findSources() }
-                    } else null,
-                    surface = surface,
-                )
-            }
-            if (playerActive) {
-                // The queue sits above the player for the same reason the source panel does: it is
-                // an interruption of the page, not a destination of its own.
-                if (showQueue) {
-                    Box(
-                        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f))
-                            .clickable(interactionSource = null, indication = null) { showQueue = false },
-                    ) {
-                        Column(
-                            Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.Bottom,
+                        Box(
+                            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f))
+                                .clickable(interactionSource = null, indication = null) { showLyricsMatch = false },
                         ) {
-                            QueuePanel(
-                                ui = queueUi,
-                                // The sheet itself must swallow taps, or every touch would reach
-                                // the scrim behind it and close the queue.
-                                modifier = Modifier.clickable(interactionSource = null, indication = null) {},
-                                onSelect = { index -> submitQueueCommand { done ->
-                                    app.playback.jumpToQueueIndex(index, queue.revision, done)
-                                } },
-                                onRemove = { index ->
-                                    // The revision travels with the command: a stale edit is
-                                    // rejected by the service rather than applied to a queue that
-                                    // has moved on.
-                                    submitQueueCommand { done -> app.playback.removeQueueItem(index, queue.revision, done) }
-                                },
-                                onMove = { from, to, expectedRevision ->
-                                    // Same revision rule as the other edits: if the queue changed
-                                    // while the finger was down, the service refuses rather than
-                                    // applying a move computed against a list that no longer exists.
-                                    submitQueueCommand { done -> app.playback.moveQueueItem(from, to, expectedRevision, done) }
-                                },
-                                onClear = { submitQueueCommand { done -> app.playback.clearQueue(queue.revision, done) } },
-                                onClose = { showQueue = false },
-                            )
+                            Column(Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.Bottom) {
+                                LyricsMatchSheet(
+                                    ui = matchUi,
+                                    modifier = Modifier.clickable(interactionSource = null, indication = null) {},
+                                    onSearch = { _, platform, keywords -> app.lyricsMatch.search(platform, keywords, 1) },
+                                    onPreview = app.lyricsMatch::preview,
+                                    onBind = { original, candidate -> app.lyricsMatch.bind(original, candidate, 0L) },
+                                    onUnbind = app.lyricsMatch::reset,
+                                    onDismiss = { showLyricsMatch = false },
+                                )
+                            }
                         }
                     }
-                }
-                // Same layering as the queue: a sheet over the player, closed by the scrim or back.
-                if (showLyricsMatch) {
-                    val match by app.lyricsMatch.state.collectAsStateWithLifecycle()
-                    val matchUi = lyricsMatchUiOf(
-                        match,
-                        title = currentSong?.title ?: playback.title,
-                        artist = currentSong?.artists?.joinToString(" / ") ?: playback.artist,
-                    )
-                    Box(
-                        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f))
-                            .clickable(interactionSource = null, indication = null) { showLyricsMatch = false },
-                    ) {
-                        Column(Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.Bottom) {
-                            LyricsMatchSheet(
-                                ui = matchUi,
-                                modifier = Modifier.clickable(interactionSource = null, indication = null) {},
-                                onSearch = { _, platform, keywords -> app.lyricsMatch.search(platform, keywords, 1) },
-                                onPreview = app.lyricsMatch::preview,
-                                onBind = { original, candidate -> app.lyricsMatch.bind(original, candidate, 0L) },
-                                onUnbind = app.lyricsMatch::reset,
-                                onDismiss = { showLyricsMatch = false },
-                            )
-                        }
+                    if (showSongInfo) {
+                        SongInfoDialog(
+                            title = playback.title,
+                            rows = listOf(
+                                "歌手" to playback.artist,
+                                "专辑" to playback.album,
+                                "时长" to if (playback.durationMs > 0) formatDuration(playback.durationMs) else "",
+                                "歌单平台" to playback.queuePlatform?.displayName.orEmpty(),
+                                "实际音源" to playback.sourcePlatform?.displayName.orEmpty(),
+                                "音质" to playback.qualityName.orEmpty(),
+                            ).filter { it.second.isNotBlank() },
+                            onDismiss = { showSongInfo = false },
+                        )
                     }
-                }
-                if (showSongInfo) {
-                    SongInfoDialog(
-                        title = playback.title,
-                        rows = listOf(
-                            "歌手" to playback.artist,
-                            "专辑" to playback.album,
-                            "时长" to if (playback.durationMs > 0) formatDuration(playback.durationMs) else "",
-                            "歌单平台" to playback.queuePlatform?.displayName.orEmpty(),
-                            "实际音源" to playback.sourcePlatform?.displayName.orEmpty(),
-                            "音质" to playback.qualityName.orEmpty(),
-                        ).filter { it.second.isNotBlank() },
-                        onDismiss = { showSongInfo = false },
+                    // The source panel sits above the player: an interruption, not a destination. It stays in
+                    // the tree so the sheet can slide out once the search is over, draws its own scrim and
+                    // takes the back key while it is on screen.
+                    SourcePanel(
+                        ui = sourcePanel,
+                        dark = dark,
+                        onPick = { index -> app.sourceSelection.select(selection.revision, index) },
+                        onCancel = { app.sourceSelection.cancel(selection.revision) },
+                        onSkip = { app.playback.next() },
+                        // A search the user started has nothing to resume: retrying it is searching again.
+                        onRetry = { if (sourcePanel.manual) findSources() else app.playback.resume() },
                     )
                 }
-                // The source panel sits above the player: an interruption, not a destination. It stays in
-                // the tree so the sheet can slide out once the search is over, draws its own scrim and
-                // takes the back key while it is on screen.
-                SourcePanel(
-                    ui = sourcePanel,
-                    dark = dark,
-                    onPick = { index -> app.sourceSelection.select(selection.revision, index) },
-                    onCancel = { app.sourceSelection.cancel(selection.revision) },
-                    onSkip = { app.playback.next() },
-                    // A search the user started has nothing to resume: retrying it is searching again.
-                    onRetry = { if (sourcePanel.manual) findSources() else app.playback.resume() },
+                // Drawn after the player and its overlays, so queue and source scrims cannot cover it.
+                NoticePill(
+                    state = notice,
+                    // Page margins keep a long two-line notice off the screen edges.
+                    modifier = if (playerCovering) {
+                        Modifier.align(Alignment.TopCenter)
+                            .padding(horizontal = Space.page)
+                            .windowInsetsPadding(WindowInsets.statusBars)
+                            // Below the player's 56dp top bar, clear of the playback controls.
+                            .padding(top = 64.dp)
+                    } else {
+                        Modifier.align(Alignment.BottomCenter)
+                            .padding(horizontal = Space.page)
+                            .windowInsetsPadding(WindowInsets.navigationBars)
+                            // dockHeight includes the dock's 8dp bottom spacer, so the dock's top edge is at dockHeight.
+                            .padding(bottom = with(LocalDensity.current) { dockHeight.toDp() } + 8.dp)
+                    },
                 )
             }
-            // Drawn after the player and its overlays, so queue and source scrims cannot cover it.
-            NoticePill(
-                state = notice,
-                // Page margins keep a long two-line notice off the screen edges.
-                modifier = if (playerCovering) {
-                    Modifier.align(Alignment.TopCenter)
-                        .padding(horizontal = Space.page)
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                        // Below the player's 56dp top bar, clear of the playback controls.
-                        .padding(top = 64.dp)
-                } else {
-                    Modifier.align(Alignment.BottomCenter)
-                        .padding(horizontal = Space.page)
-                        .windowInsetsPadding(WindowInsets.navigationBars)
-                        // dockHeight includes the dock's 8dp bottom spacer, so the dock's top edge is at dockHeight.
-                        .padding(bottom = with(LocalDensity.current) { dockHeight.toDp() } + 8.dp)
-                },
-            )
+            // The sheets and the notice over the player sample the player, not the tab under it;
+            // the dock keeps sampling the tab. Recorded only while the player is open or moving.
+            GlassLayer(active = playerActive, overlay = overPlayer, content = playerLayer)
         }
+        // "透明效果" off, battery saver and Android below 12 make every glass surface solid.
+        GlassHost(enabled = settings.transparencyEnabled, overlay = chrome, content = pages)
     }
 }
 

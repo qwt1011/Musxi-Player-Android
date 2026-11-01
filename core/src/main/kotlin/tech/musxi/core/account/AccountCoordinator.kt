@@ -25,6 +25,15 @@ class AccountCoordinator {
         true
     }
 
+    /** Display metadata refresh cannot change account ownership, generation or membership. */
+    fun refreshProfile(platform: Platform, expectedGeneration: Long, profile: AccountProfile): Boolean = synchronized(gate) {
+        val previous = state(platform)
+        if (previous.generation != expectedGeneration || previous.phase != AccountPhase.CONNECTED ||
+            profile.platform != platform || previous.profile?.id != profile.id) return false
+        publish(previous.copy(profile = profile))
+        true
+    }
+
     fun begin(platform: Platform): Long = synchronized(gate) {
         val previous = state(platform)
         // Superseding a live attempt must retain its original cancellation destination.

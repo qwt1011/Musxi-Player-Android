@@ -11,7 +11,7 @@ import tech.musxi.core.account.Membership
 import tech.musxi.core.account.MembershipLevel
 
 /** Internal types deliberately do not implement data-class toString (they contain credentials). */
-internal class Identity(val id: String, val name: String)
+internal class Identity(val id: String, val name: String, val avatarUrl: String? = null)
 internal class LoginRequest(val opaque: Any, val launch: Intent?)
 internal sealed interface PollResult {
     class Complete(val session: Any) : PollResult
@@ -38,7 +38,7 @@ internal class KugouDriver(context: Context) : PlatformDriver {
     override fun verify(session: Any): Any = api.verify(session as KugouApi.Session)
     override fun save(session: Any) = store.save(session as KugouApi.Session)
     override fun clear() = store.clear()
-    override fun identity(session: Any): Identity = (session as KugouApi.Session).let { Identity(it.userId, it.nickname) }
+    override fun identity(session: Any): Identity = (session as KugouApi.Session).let { Identity(it.userId, it.nickname, it.avatarUrl) }
     override fun membership(session: Any): Membership = api.membership(session as KugouApi.Session).let {
         membershipState(it.isVip, "酷狗会员", it.expiresAtEpochMs)
     }
@@ -67,7 +67,7 @@ internal class QqDriver(context: Context) : PlatformDriver {
     override fun verify(session: Any): Any = api.verify(session as QqMusicApi.Session)
     override fun save(session: Any) = store.save(session as QqMusicApi.Session)
     override fun clear() = store.clear()
-    override fun identity(session: Any): Identity = (session as QqMusicApi.Session).let { Identity(it.musicId, it.nickname) }
+    override fun identity(session: Any): Identity = (session as QqMusicApi.Session).let { Identity(it.musicId, it.nickname, it.avatarUrl) }
     override fun membership(session: Any): Membership = api.membership(session as QqMusicApi.Session).let {
         membershipState(it.isVip, it.name, it.expiresAtEpochMs)
     }
@@ -97,7 +97,7 @@ internal class NeteaseDriver(context: Context) : PlatformDriver {
     override fun verify(session: Any): Any = api.verify(session as NeteaseApi.Session)
     override fun save(session: Any) = store.save(session as NeteaseApi.Session)
     override fun clear() = store.clear()
-    override fun identity(session: Any): Identity = (session as NeteaseApi.Session).let { Identity(it.userId, it.nickname) }
+    override fun identity(session: Any): Identity = (session as NeteaseApi.Session).let { Identity(it.userId, it.nickname, it.avatarUrl) }
     override fun membership(session: Any): Membership = api.membership(session as NeteaseApi.Session).let {
         membershipState(it.isVip, "网易云会员", it.expiresAtEpochMs)
     }

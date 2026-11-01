@@ -20,26 +20,40 @@ private val SignedInPhases = setOf(
 )
 
 /**
- * One account line. The wording comes from the account page's own mapper (`toRowUi`), so the two
- * pages cannot describe the same state differently; this only decides what goes where.
+ * One account line. The nickname and the sentences about a state come from the account page's own
+ * mapper (`toRowUi`), so the two pages cannot describe the same state differently; this only decides
+ * what goes where.
  *
- * The second line holds the nickname and/or one sentence. The right edge holds the short state,
- * unless the sentence already is that state ("未连接"), so nothing is said twice.
+ * Normal rows say nothing at the right edge. It speaks only when the user can act on it: a platform
+ * not connected yet ("连接"), a network error, an expired login. A signed-in row keeps the membership
+ * word on its second line; a state with a sentence of its own ("登录已过期") shows that instead.
  */
 fun meAccountRowOf(state: AccountState): MeAccountRow {
     val row = state.toRowUi()
+    val phase = state.phase
     val name = row.name
-    var hint = if (state.phase == AccountPhase.DISCONNECTED) row.pill else row.detail
-    // A connected row whose nickname is missing would otherwise have an empty second line.
-    if (name == null && hint == null) hint = row.pill
+    var hint = when (phase) {
+        AccountPhase.DISCONNECTED -> null
+        AccountPhase.REAUTH_REQUIRED -> "登录已过期"
+        else -> row.detail
+    }
+    // A signed-in row whose nickname is missing would otherwise have an empty second line.
+    if (phase != AccountPhase.DISCONNECTED && name == null && hint == null) hint = row.pill
+    val status = when (phase) {
+        AccountPhase.DISCONNECTED -> "连接"
+        AccountPhase.RETRYABLE_ERROR -> row.pill
+        AccountPhase.REAUTH_REQUIRED -> "需要重新登录"
+        else -> null
+    }
     return MeAccountRow(
         platform = state.platform,
         name = name,
         hint = hint,
         badge = membershipBadgeOf(state),
-        status = row.pill.takeIf { it != hint },
-        attention = state.phase == AccountPhase.RETRYABLE_ERROR ||
-            state.phase == AccountPhase.REAUTH_REQUIRED,
+        status = status,
+        attention = phase == AccountPhase.RETRYABLE_ERROR || phase == AccountPhase.REAUTH_REQUIRED,
+        // The picture belongs to whoever the row names; an expired login names nobody.
+        avatarUrl = state.profile?.avatarUrl?.takeIf { name != null },
     )
 }
 

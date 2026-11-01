@@ -46,9 +46,11 @@ fun MeScreen(
         autoCheck = null, badge = false,
     ),
     updateActions: UpdateActions = UpdateActions(),
+    /** Hoisted so tapping the "我的" tab again can scroll back to the top. */
+    scrollState: androidx.compose.foundation.ScrollState = rememberScrollState(),
 ) {
     Column(
-        modifier.fillMaxSize().verticalScroll(rememberScrollState())
+        modifier.fillMaxSize().verticalScroll(scrollState)
             .padding(horizontal = Space.page),
     ) {
         Spacer(Modifier.height(Space.section))

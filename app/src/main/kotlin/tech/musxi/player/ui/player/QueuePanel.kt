@@ -49,8 +49,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import tech.musxi.player.ui.components.Cover
+import tech.musxi.player.ui.components.RowSpec
+import tech.musxi.player.ui.components.SectionTitle
 import tech.musxi.player.ui.model.formatDuration
 import tech.musxi.player.ui.theme.Space
 import tech.musxi.player.ui.theme.nowPlayingAccent
@@ -104,7 +107,7 @@ fun QueuePanel(
     onClose: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
-    val rowHeight = if (showCover) 60.dp else 56.dp
+    val rowHeight = queueRowHeight(showCover)
     val density = LocalDensity.current
     val rowHeightPx = with(density) { rowHeight.toPx() }
     // Drag state lives here, not in the row: only this composable knows the row height that turns
@@ -197,6 +200,7 @@ fun QueuePanel(
                     current = index == ui.currentIndex,
                     editing = ui.editing,
                     showCover = showCover,
+                    rowHeight = rowHeight,
                     showHandle = !shuffled,
                     number = if (shuffled) playOrder[index] ?: (index + 1) else index + 1,
                     lifted = lifted,
@@ -297,22 +301,29 @@ private fun Header(count: Int, editing: Boolean, onClear: () -> Unit, onClose: (
 private const val UPCOMING_HEADER = Int.MIN_VALUE
 
 /**
- * Heading above the up-next rows in shuffled playback.
+ * Height of a queue row. Fixed, because the drag turns finger travel into a number of rows with it,
+ * but computed: the two text lines at the current font scale plus the shared row padding, never less
+ * than [RowSpec.minHeight]. At 200% the row grows instead of clipping its text.
+ */
+@Composable
+internal fun queueRowHeight(showCover: Boolean): Dp {
+    val type = MaterialTheme.typography
+    val text = with(LocalDensity.current) { type.titleSmall.lineHeight.toDp() + type.bodySmall.lineHeight.toDp() }
+    val lead = if (showCover) RowSpec.coverCompact else 0.dp
+    return maxOf(RowSpec.minHeight, maxOf(text, lead) + RowSpec.vertical * 2)
+}
+
+/**
+ * Heading above the up-next rows in shuffled playback, the same [SectionTitle] every page uses.
  *
  * The note says why the rows cannot be dragged, so the missing handles do not look like a bug.
  */
 @Composable
 private fun UpcomingHeader(shuffled: Boolean) {
     val cs = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxWidth().padding(horizontal = Space.page, vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "接下来播放",
-                style = MaterialTheme.typography.labelLarge,
-                color = cs.onSurfaceVariant,
-            )
+    Column(Modifier.fillMaxWidth().padding(horizontal = Space.page, vertical = RowSpec.vertical)) {
+        SectionTitle("接下来播放") {
             if (shuffled) {
-                Spacer(Modifier.width(8.dp))
                 Text(
                     "随机",
                     modifier = Modifier
@@ -327,7 +338,6 @@ private fun UpcomingHeader(shuffled: Boolean) {
         if (shuffled) {
             Text(
                 "随机播放中，按实际顺序显示；切回顺序播放后可拖动排序",
-                modifier = Modifier.padding(top = 4.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = cs.onSurfaceVariant,
             )
@@ -342,6 +352,7 @@ private fun QueueLine(
     current: Boolean,
     editing: Boolean,
     showCover: Boolean,
+    rowHeight: Dp,
     onClick: () -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
@@ -355,7 +366,7 @@ private fun QueueLine(
     val cs = MaterialTheme.colorScheme
     val accent = nowPlayingAccent()
     Row(
-        modifier.fillMaxWidth().height(if (showCover) 60.dp else 56.dp)
+        modifier.fillMaxWidth().height(rowHeight)
             // The dragged row travels with the finger and sits above its neighbours, so the list
             // says "this one is in your hand" without reordering data until the finger lifts.
             .graphicsLayer {
@@ -375,7 +386,9 @@ private fun QueueLine(
         // detail page: the same idea in both lists, so the two pages agree about what "current" is.
         // Without covers the slot takes the room the artwork used to hold, so the numbers stay the
         // list's only rhythm instead of leaving a hole on the left.
-        Box(Modifier.width(if (showCover) 24.dp else 28.dp), contentAlignment = Alignment.CenterStart) {
+        // The number grows with the font, so "10" is not cut at 200%; never below its dp width.
+        val slot = (if (showCover) 24.dp else 28.dp) * LocalDensity.current.fontScale.coerceAtLeast(1f)
+        Box(Modifier.width(slot), contentAlignment = Alignment.CenterStart) {
             if (current) {
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     listOf(8.dp, 13.dp, 6.dp).forEach { barHeight ->

@@ -16,8 +16,12 @@ musxi.release.keyAlias=release
 
 密码只从进程环境变量 `MUSXI_RELEASE_STORE_PASSWORD` 读取；专用发布密钥的
 store password 与 key password 使用同一个密码。不要把密码写入
-`gradle.properties`、仓库文件、日志或命令参数。验收只能使用一次性测试密钥，
-不得读取或复制真实发布密钥。
+`gradle.properties`、仓库文件、日志或命令参数。测试签名流程使用独立的一次性测试密钥；
+经所有者授权的实际版本发布使用长期保存的发布密钥。首次公开发布后，后续覆盖更新必须沿用同一密钥，
+不能再把该密钥当作一次性材料删除。私钥库、别名和密码应另作安全离线备份，不能加入 Git 或 Release 附件。
+
+v0.2 是 `tech.musxi.player` 的首次正式签名发布，版本为 `0.2.0` / code 5。
+旧 v0.1 的 `tech.musxi.player.dev` 使用开发签名，两种包各自保存数据，可以并存；不能用正式包自动迁移开发包账号或队列。
 
 ## 构建与安装
 

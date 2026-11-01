@@ -5,26 +5,50 @@ import tech.musxi.core.playback.PreferredAudioQuality
 import tech.musxi.core.settings.LyricsFontSize
 import tech.musxi.core.settings.ThemeMode
 import tech.musxi.player.ui.theme.Accent
+import tech.musxi.player.ui.theme.displayName
 
-/** Membership mark next to a platform name. Unknown membership shows no mark, so it has no value here. */
-enum class MembershipBadge { MEMBER, NON_MEMBER }
+/** Membership word after the platform name. Unknown membership says nothing, so it has no value here. */
+enum class MembershipBadge(val label: String) { MEMBER("会员"), NON_MEMBER("非会员") }
 
 /**
  * One platform line of the "账号" group, derived by [meAccountRowOf]. Plain data with no Compose
  * types, so every account phase can be tested without a screen.
+ *
+ * The row reads in two lines. [title] is the nickname, or the platform when nobody is known;
+ * [subtitle] is one grey line: the platform and then membership or a sentence about the state. The
+ * right edge speaks only when the user has to do something ([status]).
  */
 data class MeAccountRow(
     val platform: Platform,
     /** Verified nickname. Null while the platform has not told us who is signed in. */
     val name: String?,
-    /** Plain sentence after the nickname, or alone when there is none ("未连接"). */
+    /** Sentence about a state that is not the usual one ("登录已过期"). Null when the state needs none. */
     val hint: String?,
+    /** Membership word for the second line. Null when unknown or when [hint] takes its place. */
     val badge: MembershipBadge?,
-    /** Short state at the right edge. Null when [hint] already says it. */
+    /** What the right edge says, only when the user can act on it ("连接", "需要重新登录"). Null otherwise. */
     val status: String?,
-    /** True when the user has to act (expired session, network error): [status] uses the error colour. */
+    /** True when a signed-in account needs the user (expired session, network error). */
     val attention: Boolean,
-)
+    /** The account's picture; only set while someone is signed in, so [name] is set too. */
+    val avatarUrl: String? = null,
+) {
+    /** First line, and the letter drawn while there is no picture. */
+    val title: String get() = name ?: platform.displayName
+
+    /** Someone is signed in: their picture (or their first letter), else the default avatar. */
+    val signedIn: Boolean get() = name != null
+
+    /**
+     * Second line. The platform is named here only when the first line is a nickname; otherwise the
+     * first line already is the platform. A sentence about the state outranks the membership word.
+     */
+    val subtitle: String?
+        get() = listOfNotNull(
+            platform.displayName.takeIf { name != null },
+            hint ?: badge?.label,
+        ).joinToString(" · ").ifEmpty { null }
+}
 
 data class MePlaybackUi(
     val autoSwitchSource: Boolean = true,

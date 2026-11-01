@@ -73,6 +73,7 @@ class LibraryBrowser(
     private var invalidatedOwner: String? = null
     private val freshQueries = mutableMapOf<FreshQuery, Long>()
     private val networkCompletions = mutableMapOf<NetworkQuery, Long>()
+    private var pendingEmpty: Pair<NetworkQuery, Long>? = null
     private val mutable = MutableStateFlow(LibraryBrowseState())
     val state = mutable.asStateFlow()
 
@@ -90,6 +91,7 @@ class LibraryBrowser(
         ++invalidationRevision
         freshQueries.clear()
         networkCompletions.clear()
+        pendingEmpty = null
         invalidatedOwner = owner?.owner
         mutable.value = LibraryBrowseState(query = mutable.value.query,
             accountVerified = identity()?.verified == true, invalidationRevision = invalidationRevision)
@@ -109,6 +111,7 @@ class LibraryBrowser(
             invalidatedOwner = latest.owner
             freshQueries.clear()
             networkCompletions.clear()
+            pendingEmpty = null
             // Account collection can still be queued on main; never retain another owner's page.
             if (!latest.sameAttempt(owner)) {
                 mutable.value = LibraryBrowseState(
@@ -157,7 +160,7 @@ class LibraryBrowser(
             val keep = expected?.sameAttempt(owner) == true && mutable.value.query == query
             val previous = mutable.value
             if (!keep) freshQueries.clear()
-            if (expected?.sameAttempt(owner) != true) networkCompletions.clear()
+            if (expected?.sameAttempt(owner) != true) { networkCompletions.clear(); pendingEmpty = null }
             owner = expected
             if (expected != null) queryOwner = expected.owner
             mutable.value = if (keep) previous.copy(refreshing = refresh && expected!!.verified,
@@ -196,7 +199,7 @@ class LibraryBrowser(
                 val verified = identity()?.verified == true
                 if (refresh && verified &&
                     (bypassRecentSuccess || !hasRecentNetworkSuccess(expected, query))) {
-                    fetchPage(token, expected, query)
+                    fetchPage(token, expected, query, confirmEmpty = bypassRecentSuccess)
                 } else {
                     mutable.value = mutable.value.copy(
                         refreshing = false,
@@ -211,22 +214,54 @@ class LibraryBrowser(
         token: Long,
         expected: LibraryCacheIdentity,
         query: LibraryQuery,
+        confirmEmpty: Boolean = false,
     ) {
         fun accept(response: Result<LibraryContent>) {
             if (!current(token, expected)) return
             response.onSuccess { content ->
                 val completedAt = now().coerceAtLeast(0)
+                val previousContent = mutable.value.content
+                val previousFetchedAt = mutable.value.fetchedAtEpochMs
                 io {
                     var storageFailed = false
                     if (!current(token, expected)) return@io
+                    var retained = (previousContent as? LibraryContent.Playlists)?.takeIf { it.page.items.isNotEmpty() }
+                    var retainedAt = previousFetchedAt
+                    val emptyHome = platform == Platform.KUGOU && query.playlist == null && query.offset == 0 &&
+                        content is LibraryContent.Playlists && content.page.items.isEmpty()
+                    var rejectEmpty = false
                     try {
-                        cacheAccess(expected) { store -> when (content) {
-                            is LibraryContent.Playlists -> store.writePlaylists(expected.owner, query.offset, SavedLibraryPage(content.page, completedAt))
-                            is LibraryContent.Tracks -> store.writeTracks(expected.owner, requireNotNull(query.playlist), query.offset, SavedLibraryPage(content.page, completedAt))
-                        } }
+                        cacheAccess(expected) { store ->
+                            if (emptyHome) {
+                                store.readPlaylists(expected.owner, 0)?.takeIf { it.page.items.isNotEmpty() }?.let {
+                                    retained = LibraryContent.Playlists(copyPlaylists(it.page)); retainedAt = it.fetchedAtEpochMs
+                                }
+                                if (retained != null) synchronized(gate) {
+                                    val key = NetworkQuery(expected.owner, expected.generation, query)
+                                    val previous = pendingEmpty
+                                    val confirmed = confirmEmpty && previous?.first == key &&
+                                        completedAt - previous.second in 0L..EMPTY_CONFIRMATION_WINDOW_MS
+                                    rejectEmpty = !confirmed
+                                    pendingEmpty = if (confirmed) null else key to completedAt
+                                }
+                            } else synchronized(gate) { pendingEmpty = null }
+                            if (!rejectEmpty) when (content) {
+                                is LibraryContent.Playlists -> store.writePlaylists(expected.owner, query.offset, SavedLibraryPage(content.page, completedAt))
+                                is LibraryContent.Tracks -> store.writeTracks(expected.owner, requireNotNull(query.playlist), query.offset, SavedLibraryPage(content.page, completedAt))
+                            }
+                        }
                     } catch (_: Exception) { storageFailed = true }
                     deliver {
                         if (current(token, expected)) {
+                            // A failed cache read must not bypass the non-empty visible-page guard.
+                            if (rejectEmpty || (emptyHome && retained != null && storageFailed)) {
+                                synchronized(gate) {
+                                    networkCompletions.remove(NetworkQuery(expected.owner, expected.generation, query))
+                                }
+                                mutable.value = mutable.value.copy(content = retained, refreshing = false,
+                                    fetchedAtEpochMs = retainedAt, stale = true, error = "incomplete", storageError = storageFailed)
+                                return@deliver
+                            }
                             // A failed write leaves the old disk page stale on the next open.
                             synchronized(gate) {
                                 if (current(token, expected)) {
@@ -247,8 +282,11 @@ class LibraryBrowser(
                     }
                 }
             }.onFailure { error ->
-                if (current(token, expected)) mutable.value = mutable.value.copy(refreshing = false,
-                    error = (error as? LibraryPageFailure)?.category?.takeIf { it in safeErrors } ?: "unclassified")
+                if (current(token, expected)) {
+                    synchronized(gate) { pendingEmpty = null }
+                    mutable.value = mutable.value.copy(refreshing = false,
+                        error = (error as? LibraryPageFailure)?.category?.takeIf { it in safeErrors } ?: "unclassified")
+                }
             }
         }
         try {
@@ -284,6 +322,7 @@ class LibraryBrowser(
 
     companion object {
         private const val RECENT_NETWORK_SUCCESS_WINDOW_MS = 30_000L
+        private const val EMPTY_CONFIRMATION_WINDOW_MS = 60_000L
         private val safeErrors = setOf("expired", "network", "risk", "rate", "protocol", "identity", "limit",
             "incomplete", "permission", "unavailable", "endpoint", "platform", "http", "timeout")
     }

@@ -3,6 +3,7 @@
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,7 +25,6 @@ import androidx.compose.material.icons.outlined.ViewModule
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -49,22 +49,30 @@ import tech.musxi.core.library.SongSummary
 import tech.musxi.player.ui.components.Cover
 import tech.musxi.player.ui.components.CoverOutline
 import tech.musxi.player.ui.components.LoadMorePill
+import tech.musxi.player.ui.components.PlainRow
 import tech.musxi.player.ui.components.PlatformSegmented
+import tech.musxi.player.ui.components.RowDivider
+import tech.musxi.player.ui.components.RowSpec
+import tech.musxi.player.ui.components.RowText
+import tech.musxi.player.ui.components.SectionCard
+import tech.musxi.player.ui.components.SectionTitle
 import tech.musxi.player.ui.components.pressableRow
 import tech.musxi.player.ui.theme.Space
 import tech.musxi.player.ui.theme.displayName
 import tech.musxi.player.ui.theme.tabular
 
 /**
- * The library tab: a way back into what was playing, a strip of recent plays, then the playlists as
- * a list of rows, each led by a 48dp cover. The liked-songs playlist leads that list in a larger row.
+ * The library tab. Three modules sit in cards, each under its own heading: a way back into what was
+ * playing (继续播放), the liked-songs playlist (我喜欢) and a strip of recent plays (最近播放). Below
+ * them the playlists are a long list, so they lie on the page colour as rows led by a 48dp cover,
+ * with a divider that starts at the text. See `Sections.kt` for the rule behind that split.
  *
  * The list is the default. The header button switches to a 3-column or 2-column grid of covers
  * ([LibraryDensity]), which is opt-in because the owner of the product prefers the list. Hierarchy
- * in the list comes from type size, white space and cover size, not from colour blocks.
+ * comes from type size, white space and cover size, not from colour blocks.
  *
- * Horizontal page margins are applied per item rather than on the whole column, so [RecentRow] can
- * scroll to the screen edges. See its KDoc for why that is not done with a negative margin.
+ * Horizontal page margins are applied per item rather than on the whole column, and the recent
+ * strip is padded by its own `contentPadding` inside its card, see [RecentStrip].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -139,7 +147,8 @@ fun LibraryContent(
             },
             modifier = pageInset,
         )
-        Spacer(Modifier.height(8.dp))
+        // Room for the first heading below, the same gap the headings have above them.
+        Spacer(Modifier.height(Space.sibling))
         // A failed refresh with nothing cached says it once, inside the empty state.
         if (state.error != null && state.items.isNotEmpty() && !isAccountError(state.error)) {
             Text(
@@ -164,12 +173,16 @@ fun LibraryContent(
                     bottomInset = bottomInset,
                 )
             } else {
-                // The liked list leads in a larger row; every other playlist keeps the plain row.
+                // The liked list is a module of its own above the playlists; the rest is the list.
                 val featured = remember(state.items) { state.items.firstOrNull(::isLikedPlaylist) }
                 val rest = remember(state.items, featured) {
                     if (featured == null) state.items else state.items.filter { it.key != featured.key }
                 }
                 val sections = remember(rest) { groupPlaylists(rest) }
+                val hasModules = home.resume != null || featured != null || home.recent.isNotEmpty()
+                // With nothing above it the page is already clear: a heading would only label the one
+                // list there is. A titled section names itself.
+                val playlistsTitle = hasModules && rest.isNotEmpty() && sections.firstOrNull()?.title == null
                 LazyColumn(
                     Modifier.fillMaxSize(),
                     state = listState,
@@ -180,55 +193,41 @@ fun LibraryContent(
                     // inside it instead of being inserted above a playlist the list is anchored to,
                     // which would scroll them off the top.
                     item(key = "home") {
-                        Column {
+                        Column(pageInset) {
+                            // Modules that belong together sit in cards, each under its own heading.
                             home.resume?.let { resume ->
-                                Column(pageInset) {
-                                    ResumeCard(resume, onResume)
-                                    Spacer(Modifier.height(8.dp))
-                                }
+                                HomeModule("继续播放") { ResumeRow(resume, onResume) }
+                            }
+                            featured?.let { liked ->
+                                HomeModule(LIKED_HEADING) { LikedPlaylistRow(liked) { onOpenPlaylist(liked) } }
                             }
                             if (home.recent.isNotEmpty()) {
-                                RecentRow(home.recent, nowPlayingId, onPlayRecent, onRemoveRecent)
-                                Spacer(Modifier.height(16.dp))
-                            }
-                            // With nothing above it the page is already clear: a heading would only
-                            // label the one list there is.
-                            if (home.resume != null || home.recent.isNotEmpty()) {
-                                Text(
-                                    "歌单",
-                                    style = MaterialTheme.typography.titleSmall, color = cs.onSurface,
-                                    modifier = pageInset.padding(top = 8.dp, bottom = 4.dp),
-                                )
-                            }
-                        }
-                    }
-                    if (featured != null) {
-                        item(key = featured.key.stableId) {
-                            Column(pageInset) {
-                                FeaturedPlaylistCard(featured) { onOpenPlaylist(featured) }
-                                if (rest.isNotEmpty()) {
-                                    HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                                HomeModule("最近播放", padded = false) {
+                                    RecentStrip(home.recent, nowPlayingId, onPlayRecent, onRemoveRecent)
                                 }
                             }
+                            if (playlistsTitle) SectionTitle("歌单")
                         }
                     }
                     // Sections are plain items in the same list, so "load more" below stays last.
-                    sections.forEach { section ->
+                    sections.forEachIndexed { sectionIndex, section ->
+                        // A heading is there when the section has its own or the "歌单" one leads the list.
+                        val headed = section.title != null || (sectionIndex == 0 && playlistsTitle)
                         section.title?.let { title ->
                             item(key = "section-$title") {
-                                Text(
-                                    title,
-                                    style = MaterialTheme.typography.titleSmall, color = cs.onSurface,
-                                    modifier = pageInset.padding(top = 8.dp, bottom = 4.dp),
-                                )
+                                // The first heading follows the segmented control or a module, each of
+                                // which leaves its own gap; a later section needs one.
+                                val top = if (sectionIndex > 0) Space.section else 0.dp
+                                SectionTitle(title, pageInset.padding(top = top))
                             }
                         }
                         if (density == LibraryDensity.LIST) {
                             itemsIndexed(section.items, key = { _, it -> it.key.stableId }) { index, playlist ->
                                 Column(pageInset) {
                                     PlaylistRow(playlist) { onOpenPlaylist(playlist) }
+                                    // The line starts at the text, not under the cover.
                                     if (index < section.items.lastIndex) {
-                                        HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                                        RowDivider(start = RowSpec.textStart(RowSpec.cover))
                                     }
                                 }
                             }
@@ -236,9 +235,9 @@ fun LibraryContent(
                             // Grid rows are plain items too, so the load-more pill stays the last item.
                             val rows = section.items.chunked(density.columns)
                             itemsIndexed(rows, key = { _, row -> "row-${row.first().key.stableId}" }) { index, row ->
-                                // Rows space themselves from below; the first one also clears the divider
-                                // or heading above it, which list rows do with their own padding.
-                                if (index == 0) Spacer(Modifier.height(Space.sibling))
+                                // Rows space themselves from below; the first one also takes the padding a
+                                // list row has above its cover when no heading sits above it.
+                                if (index == 0 && !headed) Spacer(Modifier.height(RowSpec.vertical))
                                 PlaylistGridRow(row, density.columns, pageInset) { onOpenPlaylist(it) }
                             }
                         }
@@ -310,27 +309,25 @@ private fun LibraryEmpty(
 }
 
 /**
- * No account on this platform yet. A tonal card with one filled button: connecting is the only thing
- * that fills this tab, so the card says what connecting gives and offers it once.
+ * No account on this platform yet. A card like every other module, with one filled button:
+ * connecting is the only thing that fills this tab, so the card says what connecting gives and
+ * offers it once.
  */
 @Composable
 private fun ConnectCard(platformName: String, onOpenAccount: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Column(
-        Modifier.fillMaxWidth()
-            .clip(MaterialTheme.shapes.large)
-            .background(cs.surfaceContainerHigh)
-            .padding(20.dp),
-    ) {
-        Text("连接$platformName", style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "连接后同步你的歌单、收藏和播放记录",
-            style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = onOpenAccount) {
-            Text("去连接", style = MaterialTheme.typography.labelLarge)
+    SectionCard {
+        Column(Modifier.padding(vertical = Space.inner)) {
+            Text("连接$platformName", style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "连接后同步你的歌单、收藏和播放记录",
+                style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(Space.inner))
+            Button(onClick = onOpenAccount) {
+                Text("去连接", style = MaterialTheme.typography.labelLarge)
+            }
         }
     }
 }
@@ -388,32 +385,34 @@ private fun LibraryDensity.icon(): ImageVector = when (this) {
     LibraryDensity.GRID_LARGE -> Icons.Outlined.GridView
 }
 
-/** One playlist: 48dp cover, title, then a tabular count. The hairline is the app-wide separator. */
+/**
+ * One playlist: 48dp cover, title, then a tabular count. The row has no card (a list this long lies
+ * on the page); its height is the cover plus the shared row padding, and the divider under it, drawn
+ * by the caller, starts at the text.
+ */
 @Composable
 private fun PlaylistRow(playlist: PlaylistSummary, onClick: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth().height(64.dp).pressableRow(onClick = onClick),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    PlainRow(onClick = onClick) {
         Cover(
             seed = playlist.key.stableId,
-            modifier = Modifier.size(48.dp),
+            modifier = Modifier.size(RowSpec.cover),
             shape = MaterialTheme.shapes.small,
             url = playlist.coverUrl,
         )
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                playlist.title, style = MaterialTheme.typography.titleSmall, color = cs.onSurface,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                "${playlist.trackCount} 首",
-                style = MaterialTheme.typography.bodySmall.tabular, color = cs.onSurfaceVariant,
-            )
-        }
+        Spacer(Modifier.width(RowSpec.leadGap))
+        RowText(playlist.title, subtitle = "${playlist.trackCount} 首", subtitleStyle = MaterialTheme.typography.bodySmall.tabular)
     }
+}
+
+/**
+ * One module of the home area: its heading, then its card, then the gap before the next module.
+ * A [padded] false card lets a horizontal strip supply its own inset.
+ */
+@Composable
+private fun HomeModule(title: String, padded: Boolean = true, content: @Composable ColumnScope.() -> Unit) {
+    SectionTitle(title)
+    SectionCard(padded = padded, content = content)
+    Spacer(Modifier.height(Space.section))
 }
 
 internal fun statusLine(state: PlaylistUiState, nowEpochMs: Long): String {

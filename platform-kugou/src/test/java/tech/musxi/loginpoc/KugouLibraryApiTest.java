@@ -444,6 +444,8 @@ public class KugouLibraryApiTest {
         KugouLibraryApi.Page<KugouLibraryApi.Playlist> p=KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:[{listid:1,name:'Fixture',count:3}],total:2}}"),0,1);
         assertEquals(1,p.nextOffset);assertEquals(2,p.total);assertEquals(3,p.items.get(0).trackCount);
         assertEquals(-1,KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:null}}"),30,30).nextOffset);
+        rejects("incomplete",()->KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:null}}"),0,30));
+        assertTrue(KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:null,total:0}}"),0,30).items.isEmpty());
         assertEquals(30,KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:[{listid:1,count:3}]}}"),0,30).nextOffset);
         rejects("protocol",()->KugouLibraryApi.parsePlaylists(json("{status:1,data:{}}"),0,30));
         rejects("incomplete",()->KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:[],total:2}}"),0,30));

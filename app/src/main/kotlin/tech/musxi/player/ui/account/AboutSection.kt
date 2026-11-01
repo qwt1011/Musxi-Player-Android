@@ -40,7 +40,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import tech.musxi.core.update.UpdateCheckResult
+import tech.musxi.player.ui.components.ALL_LINES
+import tech.musxi.player.ui.components.CardRow
 import tech.musxi.player.ui.components.ProgressArc
+import tech.musxi.player.ui.components.RowDivider
+import tech.musxi.player.ui.components.RowSpec
+import tech.musxi.player.ui.components.RowText
+import tech.musxi.player.ui.components.SwitchRow
 import tech.musxi.player.ui.components.pressableRow
 
 /** Update state shown by [AboutSection]. Produced from [UpdateCheckResult] by [updateStatusOf]. */
@@ -191,37 +197,30 @@ fun AboutSection(
             Text("关于", style = MaterialTheme.typography.titleSmall, color = cs.onSurfaceVariant)
             Spacer(Modifier.height(4.dp))
         }
-        Row(Modifier.fillMaxWidth().heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column {
-                Text("当前版本", style = MaterialTheme.typography.titleSmall, color = cs.onSurface)
-                if (ui.developmentBuild) {
-                    Spacer(Modifier.height(3.dp))
-                    Text("开发版本", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-                }
-            }
-            Spacer(Modifier.weight(1f))
+        CardRow(onClick = null) {
+            RowText("当前版本", subtitle = if (ui.developmentBuild) "开发版本" else null)
+            Spacer(Modifier.width(RowSpec.trailGap))
             Text(version, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
         }
-        HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
-        Row(
-            Modifier.fillMaxWidth().heightIn(min = 64.dp)
-                .pressableRow(onClick = actions.onCheck, enabled = !ui.checking),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("检查更新", style = MaterialTheme.typography.titleSmall, color = cs.onSurface)
-            Spacer(Modifier.width(12.dp))
-            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                if (ui.checking) ProgressArc(size = 14.dp)
-                else ui.checkNote?.let { StatusText(it) }
-            }
+        RowDivider()
+        CardRow(onClick = actions.onCheck, enabled = !ui.checking) {
+            RowText("检查更新", titleLines = ALL_LINES)
+            Spacer(Modifier.width(RowSpec.trailGap))
+            if (ui.checking) ProgressArc(size = 14.dp)
+            else ui.checkNote?.let { StatusText(it) }
         }
         ui.release?.let { release ->
-            HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+            RowDivider()
             ReleaseBlock(release, actions, initiallyExpanded, initiallyConfirming)
         }
         ui.autoCheck?.let { enabled ->
-            HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
-            AutoCheckRow(enabled, actions.onSetAutoCheck)
+            RowDivider()
+            SwitchRow(
+                title = "自动检查更新",
+                checked = enabled,
+                onCheckedChange = actions.onSetAutoCheck,
+                subtitle = "每天一次",
+            )
         }
     }
 }
@@ -430,27 +429,6 @@ private fun PermissionRow(actions: UpdateActions) {
             openedSettings = true
             actions.onOpenInstallSettings()
         }
-    }
-}
-
-/** Whole row is the target; the switch only shows the state, so there is one tap area, not two. */
-@Composable
-private fun AutoCheckRow(enabled: Boolean, onChange: (Boolean) -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 64.dp)
-            .pressableRow(onClick = { onChange(!enabled) }, role = Role.Switch)
-            .semantics { stateDescription = if (enabled) "已开启" else "已关闭" },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text("自动检查更新", style = MaterialTheme.typography.titleSmall, color = cs.onSurface)
-            Spacer(Modifier.height(3.dp))
-            Text("每天一次", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-        }
-        Spacer(Modifier.width(12.dp))
-        // The same restrained switch as the rest of the "我的" page, not the full-colour Material one.
-        tech.musxi.player.ui.me.MeSwitch(enabled)
     }
 }
 

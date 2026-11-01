@@ -26,6 +26,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import tech.musxi.player.ui.components.GlassStyle
+import tech.musxi.player.ui.components.LocalGlass
+import tech.musxi.player.ui.components.glass
 import tech.musxi.player.ui.theme.Motion
 import tech.musxi.player.ui.theme.isDarkSurface
 
@@ -66,6 +69,8 @@ fun NoticePill(state: NoticeState, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     val dark = cs.background.isDarkSurface()
     val shape = MaterialTheme.shapes.extraLarge
+    // Null outside a GlassHost; the pill then keeps the solid dock colour.
+    val glass = LocalGlass.current
     val notice = state.current
     // Keeps the last notice on screen while its exit animation runs after current becomes null.
     val lastNotice = remember { mutableStateOf(notice) }
@@ -90,10 +95,14 @@ fun NoticePill(state: NoticeState, modifier: Modifier = Modifier) {
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
-                .shadowIfLight(dark, shape)
-                .clip(shape)
-                .background(noticeColor())
-                .then(if (dark) Modifier.border(1.dp, cs.outlineVariant.copy(alpha = 0.5f), shape) else Modifier)
+                .then(
+                    if (glass != null) {
+                        Modifier.glass(glass, shape, GlassStyle.THIN)
+                    } else {
+                        Modifier.shadowIfLight(dark, shape).clip(shape).background(noticeColor())
+                            .then(if (dark) Modifier.border(1.dp, cs.outlineVariant.copy(alpha = 0.5f), shape) else Modifier)
+                    },
+                )
                 .clickable { state.dismiss(ui.id) }
                 .padding(horizontal = 16.dp, vertical = 10.dp)
                 .semantics { liveRegion = LiveRegionMode.Polite },

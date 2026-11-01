@@ -1,90 +1,30 @@
 package tech.musxi.player.ui.me
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.unit.dp
-import tech.musxi.player.ui.theme.LocalMusxi
-import tech.musxi.player.ui.theme.Motion
+import tech.musxi.player.ui.components.RowCheck
+import tech.musxi.player.ui.components.RowChevron
+import tech.musxi.player.ui.components.RowSwitch
+import tech.musxi.player.ui.components.sectionCardColor
 
-/** The card colour of a grouped list: the lightest surface in light mode, one step up from the page in dark. */
-@Composable
-fun meCardColor(): Color {
-    val cs = MaterialTheme.colorScheme
-    return if (LocalMusxi.current.dark) cs.surfaceContainerHigh else cs.surfaceContainerLowest
-}
-
-/**
- * The page's one switch. It only shows state; the row around it is the tap target, so there is a
- * single touch area, not two.
- *
- * "On" is ink, not accent: the track moves from a pale grey to the card colour mixed toward
- * `onSurface` (dark grey in light mode, light grey in dark mode). The default Material switch fills
- * the whole track with the accent colour, which made a page of six of them look heavy. Its size is
- * in dp on purpose: a switch does not grow with the font scale, its row does.
+/*
+ * The controls of a row now live in `ui/components/RowControls.kt`, shared with every other page.
+ * These names stay because the account page's AboutSection draws its auto-check switch with
+ * `MeSwitch`, and the page's callers import them.
  */
-@Composable
-fun MeSwitch(checked: Boolean) {
-    val cs = MaterialTheme.colorScheme
-    val dark = LocalMusxi.current.dark
-    val card = meCardColor()
-    val off = lerp(card, cs.onSurface, 0.14f)
-    val on = lerp(card, cs.onSurface, if (dark) 0.45f else 0.78f)
-    val thumb = if (dark) cs.onSurface else Color.White
-    val progress by animateFloatAsState(if (checked) 1f else 0f, Motion.standard(), label = "meSwitch")
-    Canvas(Modifier.size(width = 50.dp, height = 30.dp)) {
-        val p = progress
-        drawRoundRect(color = lerp(off, on, p), cornerRadius = CornerRadius(size.height / 2))
-        val radius = 13.dp.toPx()
-        val cx = size.height / 2 + (size.width - size.height) * p
-        val cy = size.height / 2
-        // Two faint discs under the thumb stand in for a blurred shadow; dark mode has nothing to cast on.
-        if (!dark) {
-            drawCircle(Color.Black.copy(alpha = 0.06f), radius + 1.dp.toPx(), Offset(cx, cy + 1.5.dp.toPx()))
-            drawCircle(Color.Black.copy(alpha = 0.10f), radius, Offset(cx, cy + 1.dp.toPx()))
-        }
-        drawCircle(thumb, radius, Offset(cx, cy))
-    }
-}
 
-/** Right-pointing chevron at the end of a row that opens something. Hand drawn so its stroke matches the check. */
+/** The card colour of a grouped list. */
 @Composable
-fun MeChevron() {
-    val color = MaterialTheme.colorScheme.outline
-    Canvas(Modifier.size(width = 8.dp, height = 13.dp)) {
-        val w = 1.6.dp.toPx()
-        val path = Path().apply {
-            moveTo(w / 2, w / 2)
-            lineTo(size.width - w / 2, size.height / 2)
-            lineTo(w / 2, size.height - w / 2)
-        }
-        drawPath(path, color, style = Stroke(w, cap = StrokeCap.Round, join = StrokeJoin.Round))
-    }
-}
+fun meCardColor(): Color = sectionCardColor()
 
-/** Selected mark of a single-choice row. Ink, like the switch, so the page keeps one accent at most. */
+/** The page's one switch; it only shows state, the row around it is the tap target. */
 @Composable
-fun MeCheck() {
-    val color = MaterialTheme.colorScheme.onSurface
-    Canvas(Modifier.size(width = 16.dp, height = 12.dp)) {
-        val w = 1.8.dp.toPx()
-        val path = Path().apply {
-            moveTo(w / 2, size.height * 0.55f)
-            lineTo(size.width * 0.36f, size.height - w / 2)
-            lineTo(size.width - w / 2, w / 2)
-        }
-        drawPath(path, color, style = Stroke(w, cap = StrokeCap.Round, join = StrokeJoin.Round))
-    }
-}
+fun MeSwitch(checked: Boolean) = RowSwitch(checked)
+
+/** Right-pointing chevron at the end of a row that opens something. */
+@Composable
+fun MeChevron() = RowChevron()
+
+/** Selected mark of a single-choice row. */
+@Composable
+fun MeCheck() = RowCheck()

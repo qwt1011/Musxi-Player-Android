@@ -42,26 +42,32 @@ import tech.musxi.player.ui.theme.ThemeMode
 fun MeSheet(accent: Accent, mode: ThemeMode, ui: MeUi = meSampleUi(accent)) {
     MusxiTheme(accent = accent, mode = mode) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            MeScreen(
-                ui = ui,
-                actions = MeActions(),
-                appVersion = "0.2.0-alpha01",
-                update = AboutUpdateUi(
-                    developmentBuild = false, checking = false, checkNote = "已是最新", release = null,
-                    autoCheck = true, badge = false,
-                ),
-            )
+            SampleAvatars {
+                MeScreen(
+                    ui = ui,
+                    actions = MeActions(),
+                    appVersion = "0.2.0-alpha01",
+                    update = AboutUpdateUi(
+                        developmentBuild = false, checking = false, checkNote = "已是最新", release = null,
+                        autoCheck = true, badge = false,
+                    ),
+                )
+            }
         }
     }
 }
 
-/** The 账号 card with three platforms in three different states: member, network error, expired. */
+/**
+ * The 账号 card with three platforms in three different states: member, network error, expired. With
+ * [common] it shows what most users have instead: a member, a non-member and a platform not yet connected.
+ */
 @Composable
-fun MeAccountsSheet(accent: Accent, mode: ThemeMode) {
+fun MeAccountsSheet(accent: Accent, mode: ThemeMode, common: Boolean = false) {
     MusxiTheme(accent = accent, mode = mode) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.padding(horizontal = Space.page, vertical = Space.section)) {
-                MeAccountsGroup(meMixedAccountStates().map(::meAccountRowOf)) {}
+                val states = if (common) meCommonAccountStates() else meMixedAccountStates()
+                SampleAvatars { MeAccountsGroup(states.map(::meAccountRowOf)) {} }
             }
         }
     }
@@ -79,7 +85,8 @@ fun MeDarkModeSheet(accent: Accent, mode: ThemeMode, selected: StoredThemeMode =
 
 // --- samples ---------------------------------------------------------------------------------
 
-private fun profile(platform: Platform, name: String) = AccountProfile(platform, "sample-$name", name)
+private fun profile(platform: Platform, name: String) =
+    AccountProfile(platform, "sample-$name", name, avatarUrl = sampleAvatarUrl(name))
 
 /** What a user usually has: one platform signed in as a member, one as a non-member, one not yet. */
 fun meCommonAccountStates(): List<AccountState> = listOf(

@@ -73,7 +73,6 @@ enum class MoreAction {
  * only needed while the menu is open; the dot on the button comes from the separate `sleepTimerActive`.
  */
 data class MoreMenuUi(
-    val title: String,
     val artist: String,
     val album: String,
     val sleepRemaining: String?,
@@ -253,7 +252,8 @@ internal fun MoreMenu(
                 onBack = { onPage(MorePage.MAIN) },
             )
         } else {
-            MenuHeader(shown.title, supporting = shown.artist.ifBlank { null })
+            // No song heading: the page behind already names the song, and "歌曲信息" has the rest.
+            // The card's own inset is then the same above "定时停止" as below "歌曲信息".
             MenuItem(
                 label = "定时停止",
                 onClick = { onPage(MorePage.SLEEP) },

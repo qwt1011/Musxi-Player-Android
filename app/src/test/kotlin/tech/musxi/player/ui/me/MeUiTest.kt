@@ -3,6 +3,7 @@ package tech.musxi.player.ui.me
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -48,58 +49,76 @@ class MeUiTest {
 
     // --- account lines -------------------------------------------------------------------------
 
-    @Test fun disconnectedSaysItOnceOnTheSecondLine() {
+    @Test fun disconnectedIsOneLineWithAConnectAction() {
         val row = meAccountRowOf(state(AccountPhase.DISCONNECTED))
         assertNull(row.name)
-        assertEquals("未连接", row.hint)
-        assertNull("the hint already says it", row.status)
+        assertEquals("酷狗", row.title)
+        assertNull("the platform is the title; nothing to add under it", row.subtitle)
+        assertEquals("连接", row.status)
         assertNull(row.badge)
-        assertFalse(row.attention)
+        assertFalse("not connected yet is not a fault", row.attention)
     }
 
-    @Test fun waitingNamesTheAppAndShowsTheState() {
+    @Test fun waitingNamesTheAppAndStaysQuietAtTheRightEdge() {
         val row = meAccountRowOf(state(AccountPhase.WAITING_CONFIRMATION, platform = Platform.KUGOU))
         assertEquals("在酷狗里确认后返回", row.hint)
-        assertEquals("等待确认", row.status)
+        assertEquals("在酷狗里确认后返回", row.subtitle)
+        assertNull("the user acts in the other app, not here", row.status)
         assertFalse(row.attention)
-        assertEquals("等待确认", meAccountRowOf(state(AccountPhase.PREPARING)).status)
+        assertNull(meAccountRowOf(state(AccountPhase.PREPARING)).status)
     }
 
     @Test fun verifyingWithoutNameExplainsItself() {
         val row = meAccountRowOf(state(AccountPhase.VERIFYING))
         assertNull(row.name)
         assertEquals("正在确认登录状态", row.hint)
-        assertEquals("验证中", row.status)
+        assertNull("a short wait has nothing to act on", row.status)
     }
 
-    @Test fun verifyingWithNameKeepsTheNameOnly() {
+    @Test fun verifyingWithNameShowsThePlatformOnly() {
         val row = meAccountRowOf(state(AccountPhase.VERIFYING, name = "阿青", level = MembershipLevel.YES))
-        assertEquals("阿青", row.name)
+        assertEquals("阿青", row.title)
         assertNull(row.hint)
-        assertEquals("验证中", row.status)
+        assertNull(row.status)
         assertNull("membership is not settled right after a login", row.badge)
+        assertEquals("酷狗", row.subtitle)
     }
 
-    @Test fun connectedShowsNicknameStateAndMembership() {
+    @Test fun connectedShowsNicknameOverPlatformAndMembership() {
         val row = meAccountRowOf(state(AccountPhase.CONNECTED, name = "阿青", level = MembershipLevel.YES))
         assertEquals("阿青", row.name)
+        assertEquals("阿青", row.title)
         assertNull(row.hint)
-        assertEquals("已连接", row.status)
+        assertNull("a healthy row says nothing at the right edge", row.status)
         assertEquals(MembershipBadge.MEMBER, row.badge)
+        assertEquals("酷狗 · 会员", row.subtitle)
         assertFalse(row.attention)
+    }
+
+    @Test fun membershipWordFollowsThePlatform() {
+        val member = meAccountRowOf(state(AccountPhase.CONNECTED, "云村用户 8842", platform = Platform.NETEASE, level = MembershipLevel.YES))
+        assertEquals("云村用户 8842", member.title)
+        assertEquals("网易云 · 会员", member.subtitle)
+        val non = meAccountRowOf(state(AccountPhase.CONNECTED, "阿青", platform = Platform.QQ, level = MembershipLevel.NO))
+        assertEquals("QQ音乐 · 非会员", non.subtitle)
+        val unknown = meAccountRowOf(state(AccountPhase.CONNECTED, "阿青", platform = Platform.QQ))
+        assertEquals("unknown membership writes the platform only", "QQ音乐", unknown.subtitle)
     }
 
     @Test fun connectedWithoutNicknameStillHasASecondLine() {
         val row = meAccountRowOf(state(AccountPhase.CONNECTED))
         assertNull(row.name)
+        assertEquals("酷狗", row.title)
         assertEquals("已连接", row.hint)
+        assertEquals("已连接", row.subtitle)
         assertNull("not said twice", row.status)
     }
 
-    @Test fun revalidatingKeepsTheKnownMembership() {
+    @Test fun revalidatingKeepsTheKnownMembershipAndStaysQuiet() {
         val row = meAccountRowOf(state(AccountPhase.REVALIDATING, name = "阿青", level = MembershipLevel.NO))
-        assertEquals("验证中", row.status)
+        assertNull(row.status)
         assertEquals(MembershipBadge.NON_MEMBER, row.badge)
+        assertEquals("酷狗 · 非会员", row.subtitle)
     }
 
     @Test fun networkErrorNeedsAttentionAndKeepsTheName() {
@@ -111,6 +130,7 @@ class MeUiTest {
         assertEquals("网络异常", row.status)
         assertTrue(row.attention)
         assertEquals(MembershipBadge.NON_MEMBER, row.badge)
+        assertEquals("a sentence about the state outranks the membership word", "酷狗 · 确认超时，可重试", row.subtitle)
     }
 
     @Test fun expiredSessionNeedsAttentionAndShowsNoMembership() {
@@ -118,10 +138,21 @@ class MeUiTest {
             state(AccountPhase.REAUTH_REQUIRED, name = "阿青", error = AccountError.EXPIRED, level = MembershipLevel.YES),
         )
         assertNull(row.name)
-        assertEquals("重新登录以恢复同步", row.hint)
-        assertEquals("已过期", row.status)
+        assertEquals("酷狗", row.title)
+        assertEquals("登录已过期", row.hint)
+        assertEquals("登录已过期", row.subtitle)
+        assertEquals("需要重新登录", row.status)
         assertTrue(row.attention)
         assertNull("a signed-out account has no membership to show", row.badge)
+    }
+
+    @Test fun theThreeRowsOfTheBrief() {
+        val normal = meAccountRowOf(state(AccountPhase.CONNECTED, "云村用户 8842", platform = Platform.NETEASE, level = MembershipLevel.YES))
+        assertEquals(Triple("云村用户 8842", "网易云 · 会员", null), Triple(normal.title, normal.subtitle, normal.status))
+        val broken = meAccountRowOf(state(AccountPhase.REAUTH_REQUIRED, error = AccountError.EXPIRED))
+        assertEquals(Triple("酷狗", "登录已过期", "需要重新登录"), Triple(broken.title, broken.subtitle, broken.status))
+        val fresh = meAccountRowOf(state(AccountPhase.DISCONNECTED))
+        assertEquals(Triple("酷狗", null, "连接"), Triple(fresh.title, fresh.subtitle, fresh.status))
     }
 
     @Test fun unknownMembershipShowsNoMark() {
@@ -132,12 +163,18 @@ class MeUiTest {
         assertNull(membershipBadgeOf(state(AccountPhase.CONNECTED, level = MembershipLevel.YES)))
     }
 
-    @Test fun everyPhaseHasASecondLineAndNeverSaysTheSameThingTwice() {
+    @Test fun everyPhaseHasATitleAndNeverSaysTheSameThingTwice() {
+        // The right edge speaks only where the user can act; every other phase leaves it empty.
+        val speaking = setOf(AccountPhase.DISCONNECTED, AccountPhase.RETRYABLE_ERROR, AccountPhase.REAUTH_REQUIRED)
         for (phase in AccountPhase.entries) {
             for (name in listOf(null, "阿青")) {
                 val row = meAccountRowOf(state(phase, name = name))
-                assertTrue("$phase/$name has nothing on the second line", row.name != null || row.hint != null)
-                assertNotEquals("$phase/$name repeats itself", row.hint, row.status)
+                assertTrue("$phase/$name has no title", row.title.isNotBlank())
+                if (phase != AccountPhase.DISCONNECTED) {
+                    assertNotNull("$phase/$name has nothing on the second line", row.subtitle)
+                }
+                assertNotEquals("$phase/$name repeats itself", row.subtitle, row.status)
+                assertEquals("$phase/$name", phase in speaking, row.status != null)
             }
         }
     }

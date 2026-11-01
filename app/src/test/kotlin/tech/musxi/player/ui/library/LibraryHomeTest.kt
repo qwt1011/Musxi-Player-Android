@@ -178,4 +178,18 @@ class LibraryHomeTest {
         // OTHER is what every playlist reads as in a cache written before `kind` existed.
         assertTrue(isLikedPlaylist(playlist("我喜欢", PlaylistKind.OTHER)))
     }
+
+    // The module's heading is "我喜欢"; the row under it must not say the same words again.
+
+    @Test fun aTitleThatOnlyRepeatsTheHeadingBecomesAllSongs() {
+        assertEquals("全部歌曲", likedRowTitle("我喜欢"))
+        assertEquals("全部歌曲", likedRowTitle("我喜欢的音乐"))
+        assertEquals("全部歌曲", likedRowTitle("  我 喜欢 的音乐 "))
+        assertEquals("全部歌曲", likedRowTitle(""))
+    }
+
+    @Test fun aTitleThatAddsSomethingIsKept() {
+        assertEquals("阿青喜欢的音乐", likedRowTitle("阿青喜欢的音乐"))
+        assertEquals("Liked Songs", likedRowTitle("Liked Songs"))
+    }
 }

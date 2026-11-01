@@ -13,6 +13,7 @@ import tech.musxi.player.ui.design.libraryEmptyDisconnected
 import tech.musxi.player.ui.design.libraryEmptyZero
 import tech.musxi.player.ui.design.libraryError
 import tech.musxi.player.ui.design.libraryLoaded
+import tech.musxi.player.ui.library.LibraryDensity
 import tech.musxi.player.ui.library.PlaylistUiState
 import tech.musxi.player.ui.theme.Accent
 import tech.musxi.player.ui.theme.ThemeMode
@@ -32,10 +33,21 @@ class LibrarySheetTest {
         capture("library_empty_disconnected_mist_light", ThemeMode.LIGHT, libraryEmptyDisconnected())
     @Test fun failed() = capture("library_error_mist_light", ThemeMode.LIGHT, libraryError())
     @Test fun loadedDark() = capture("library_loaded_mist_dark", ThemeMode.DARK, libraryLoaded())
+    @Test fun loadedCompactGrid() = capture(
+        "library_loaded_grid_compact_mist_light", ThemeMode.LIGHT, libraryLoaded(), LibraryDensity.GRID_COMPACT,
+    )
+    @Test fun loadedLargeGrid() = capture(
+        "library_loaded_grid_large_mist_light", ThemeMode.LIGHT, libraryLoaded(), LibraryDensity.GRID_LARGE,
+    )
 
-    private fun capture(name: String, mode: ThemeMode, state: PlaylistUiState) {
+    private fun capture(
+        name: String,
+        mode: ThemeMode,
+        state: PlaylistUiState,
+        density: LibraryDensity? = null,
+    ) {
         val out = File("build/design/$name.png")
-        captureRoboImage(out.path) { LibrarySheet(Accent.MIST, mode, state) }
+        captureRoboImage(out.path) { LibrarySheet(Accent.MIST, mode, state, density = density) }
         if (!out.exists()) return
         val bitmap = BitmapFactory.decodeFile(out.path)
         assertTrue("$name failed to decode", bitmap != null)

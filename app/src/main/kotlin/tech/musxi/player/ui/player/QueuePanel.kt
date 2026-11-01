@@ -76,6 +76,8 @@ data class QueueUi(
     val currentIndex: Int = -1,
     val editing: Boolean = true,
     val revision: Long = 0,
+    /** Raw slot indices after `currentIndex`, in the order playback will play them. */
+    val upcoming: List<Int> = emptyList(),
 )
 
 /**
@@ -112,10 +114,25 @@ fun QueuePanel(
     var dragRevision by remember { mutableStateOf<Long?>(null) }
     // A copy makes the pointer key sensitive to row content as well as the collection identity.
     val queueSnapshot = ui.items.toList()
+    // Shuffled playback shows rows in the real playback order. Drag is off then, because the
+    // timeline does not map onto slot order. Sequential playback keeps the plain slot order.
+    val order = remember(ui.items.size, ui.currentIndex, ui.upcoming) {
+        queueDisplayOrder(ui.items.size, ui.currentIndex, ui.upcoming)
+    }
+    val shuffled = order.shuffled
+    // Shuffled rows are numbered 1, 2, 3 in play order: their slot numbers would read as random.
+    val playOrder = remember(order) { order.upcoming.withIndex().associate { (i, slot) -> slot to i + 1 } }
+    // Shuffled: the current song, the heading, then the real order. Every slot appears once, so
+    // the slot keys stay unique; slots before the current one are not a "history" in shuffle.
+    val displayRows: List<Int> = if (shuffled) {
+        listOfNotNull(ui.currentIndex.takeIf { it in ui.items.indices }) + UPCOMING_HEADER + order.upcoming
+    } else {
+        ui.items.indices.toList()
+    }
     // Opening the queue lands on the song that is playing, one row of context above it. In a long
-    // playlist the current song is rarely in the first screenful.
+    // playlist the current song is rarely in the first screenful. Shuffled starts with it.
     val listState = rememberLazyListState(
-        initialFirstVisibleItemIndex = (ui.currentIndex - 1).coerceAtLeast(0),
+        initialFirstVisibleItemIndex = if (shuffled) 0 else (ui.currentIndex - 1).coerceAtLeast(0),
     )
 
     // A pointerInput key change cancels the gesture coroutine. Clearing these values here also
@@ -164,7 +181,15 @@ fun QueuePanel(
                     )
                 },
         ) {
-            itemsIndexed(ui.items, key = { _, row -> row.key }) { index, row ->
+            itemsIndexed(
+                displayRows,
+                key = { _, index -> if (index == UPCOMING_HEADER) UPCOMING_HEADER else ui.items[index].key },
+            ) { _, index ->
+                if (index == UPCOMING_HEADER) {
+                    UpcomingHeader(shuffled = shuffled)
+                    return@itemsIndexed
+                }
+                val row = ui.items[index]
                 val lifted = index == draggingIndex
                 QueueLine(
                     index = index,
@@ -172,6 +197,8 @@ fun QueuePanel(
                     current = index == ui.currentIndex,
                     editing = ui.editing,
                     showCover = showCover,
+                    showHandle = !shuffled,
+                    number = if (shuffled) playOrder[index] ?: (index + 1) else index + 1,
                     lifted = lifted,
                     dragOffsetPx = if (lifted) dragOffset else 0f,
                     onClick = { onSelect(index) },
@@ -182,8 +209,9 @@ fun QueuePanel(
                         ui.editing,
                         ui.revision,
                         queueSnapshot,
+                        shuffled,
                     ) {
-                        if (!ui.editing) return@pointerInput
+                        if (!ui.editing || shuffled) return@pointerInput
                         var gestureRevision: Long? = null
                         var gestureEditing = false
                         // Long-press, then drag — the platform habit for reordering a list. The
@@ -265,6 +293,48 @@ private fun Header(count: Int, editing: Boolean, onClear: () -> Unit, onClose: (
     }
 }
 
+/** Sentinel in the display list for the "接下来播放" heading. Never a real slot index. */
+private const val UPCOMING_HEADER = Int.MIN_VALUE
+
+/**
+ * Heading above the up-next rows in shuffled playback.
+ *
+ * The note says why the rows cannot be dragged, so the missing handles do not look like a bug.
+ */
+@Composable
+private fun UpcomingHeader(shuffled: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth().padding(horizontal = Space.page, vertical = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "接下来播放",
+                style = MaterialTheme.typography.labelLarge,
+                color = cs.onSurfaceVariant,
+            )
+            if (shuffled) {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "随机",
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(cs.surfaceContainerHighest)
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.onSurfaceVariant,
+                )
+            }
+        }
+        if (shuffled) {
+            Text(
+                "随机播放中，按实际顺序显示；切回顺序播放后可拖动排序",
+                modifier = Modifier.padding(top = 4.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = cs.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 private fun QueueLine(
     index: Int,
@@ -277,6 +347,10 @@ private fun QueueLine(
     modifier: Modifier = Modifier,
     lifted: Boolean = false,
     dragOffsetPx: Float = 0f,
+    /** False in shuffled playback: the row stays tappable but shows no drag handle. */
+    showHandle: Boolean = true,
+    /** The number in the left slot: the queue position, or the play order when shuffled. */
+    number: Int = index + 1,
 ) {
     val cs = MaterialTheme.colorScheme
     val accent = nowPlayingAccent()
@@ -313,7 +387,7 @@ private fun QueueLine(
                 }
             } else {
                 Text(
-                    "${index + 1}",
+                    "$number",
                     style = MaterialTheme.typography.bodySmall.tabular,
                     color = cs.onSurfaceVariant.copy(alpha = 0.7f),
                 )
@@ -359,11 +433,13 @@ private fun QueueLine(
             Modifier.size(40.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                Icons.Filled.DragHandle, "拖动排序",
-                tint = cs.onSurfaceVariant.copy(alpha = if (editing) 0.55f else 0.25f),
-                modifier = Modifier.size(20.dp),
-            )
+            if (showHandle) {
+                Icon(
+                    Icons.Filled.DragHandle, "拖动排序",
+                    tint = cs.onSurfaceVariant.copy(alpha = if (editing) 0.55f else 0.25f),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
     }
 }

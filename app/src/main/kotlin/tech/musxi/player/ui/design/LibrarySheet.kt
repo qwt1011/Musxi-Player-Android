@@ -15,6 +15,7 @@ import tech.musxi.core.account.Platform
 import tech.musxi.core.library.MediaKey
 import tech.musxi.core.library.PlaylistSummary
 import tech.musxi.player.ui.library.LibraryContent
+import tech.musxi.player.ui.library.LibraryDensity
 import tech.musxi.player.ui.library.LibraryFilter
 import tech.musxi.player.ui.library.PlaylistUiState
 import tech.musxi.player.ui.player.MiniPlayer
@@ -40,13 +41,15 @@ fun LibrarySheet(
     state: PlaylistUiState,
     mini: MiniPlayerUi = sampleMiniPlaying(),
     tab: ShellTab = ShellTab.LIBRARY,
+    /** Starting playlist layout. Null uses the saved choice, which defaults to the list. */
+    density: LibraryDensity? = null,
 ) {
     MusxiTheme(accent = accent, mode = mode) {
         val cs = MaterialTheme.colorScheme
         Surface(Modifier.fillMaxSize(), color = cs.background) {
             Column(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f)) {
-                    LibraryContent(state = state, onSelectFilter = {})
+                    LibraryContent(state = state, onSelectFilter = {}, initialDensity = density)
                 }
                 // The same dock the app ships: two coexisting chrome layouts in one set of
                 // screenshots was itself flagged as an inconsistency.

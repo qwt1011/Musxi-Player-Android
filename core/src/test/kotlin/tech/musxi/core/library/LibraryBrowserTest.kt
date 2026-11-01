@@ -29,6 +29,7 @@ class LibraryBrowserTest {
 
     private class Fixture(val platform: Platform = Platform.NETEASE) {
         var identity: LibraryCacheIdentity? = LibraryCacheIdentity("a".repeat(64), 1, true)
+        var now = 200L
         val store = Store()
         val io = ArrayDeque<() -> Unit>()
         val delivery = ArrayDeque<() -> Unit>()
@@ -41,11 +42,26 @@ class LibraryBrowserTest {
         }, object : LibraryPageFetch {
             override fun playlists(offset: Int, result: (Result<Page<PlaylistSummary>>) -> Unit) { playlistCalls.add(result) }
             override fun tracks(playlist: MediaKey, offset: Int, result: (Result<Page<SongSummary>>) -> Unit) { trackCalls.add(result) }
-        }, { io.add(it) }, { delivery.add(it) }, { 200L }, platform)
+        }, { io.add(it) }, { delivery.add(it) }, platform = platform, now = { now })
         fun flush() { while (io.isNotEmpty() || delivery.isNotEmpty()) {
             while (io.isNotEmpty()) io.removeFirst().invoke()
             while (delivery.isNotEmpty()) delivery.removeFirst().invoke()
         } }
+    }
+
+    @Test fun clearingCachedPagesDropsVisibleContentAndRejectsPendingNetworkWrite() {
+        val f = Fixture(); f.store.playlists = saved
+        f.browser.playlists(); f.flush()
+        assertNotNull(f.browser.state.value.content)
+        f.browser.clearCachedPages()
+        f.store.clear()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+        assertNull(f.browser.state.value.content)
+        assertEquals(0, f.store.writes)
+        assertFalse(f.browser.state.value.refreshing)
+        assertEquals(1, f.playlistCalls.size)
+        f.browser.playlists(); f.flush()
+        assertEquals(2, f.playlistCalls.size)
     }
 
     @Test fun cachedPageAppearsBeforeRefreshAndErrorKeepsItVisible() {
@@ -146,6 +162,103 @@ class LibraryBrowserTest {
         assertNull(f.browser.state.value.source)
         assertEquals("unclassified", f.browser.state.value.error)
         assertFalse(f.browser.state.value.refreshing)
+    }
+
+    @Test fun repeatedOpenWithinThirtySecondsShowsDiskThenSkipsNetwork() {
+        val f = Fixture(); f.store.playlists = saved
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+        f.now = 10_000L
+
+        f.browser.playlists(); f.flush()
+
+        assertEquals(1, f.playlistCalls.size)
+        assertEquals(LibrarySource.CACHE, f.browser.state.value.source)
+        assertEquals("Fresh", (f.browser.state.value.content as LibraryContent.Playlists).page.items.single().title)
+        assertFalse(f.browser.state.value.refreshing)
+    }
+
+    @Test fun networkSuccessExpiresAtThirtySeconds() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+
+        f.now = 30_200L
+        f.browser.playlists(); f.flush()
+
+        assertEquals(2, f.playlistCalls.size)
+        assertTrue(f.browser.state.value.refreshing)
+    }
+
+    @Test fun failedNetworkDoesNotThrottleNextOpen() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.failure(LibraryPageFailure("network")))
+
+        f.browser.playlists(); f.flush()
+
+        assertEquals(2, f.playlistCalls.size)
+        assertTrue(f.browser.state.value.refreshing)
+    }
+
+    @Test fun refreshAndRetryBypassRecentNetworkSuccess() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+
+        f.browser.refresh(); f.flush()
+        assertEquals(2, f.playlistCalls.size)
+        f.playlistCalls.last()(Result.success(fresh)); f.flush()
+
+        f.browser.retry(); f.flush()
+        assertEquals(3, f.playlistCalls.size)
+    }
+
+    @Test fun accountGenerationChangeBypassesRecentNetworkSuccess() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+
+        f.identity = f.identity!!.copy(generation = 2)
+        f.browser.accountChanged(); f.flush()
+
+        assertEquals(2, f.playlistCalls.size)
+        assertTrue(f.browser.state.value.refreshing)
+    }
+
+    @Test fun invalidationBypassesRecentNetworkSuccess() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+
+        f.browser.invalidate(f.identity!!); f.flush()
+
+        assertEquals(2, f.playlistCalls.size)
+        assertTrue(f.browser.state.value.refreshing)
+    }
+
+    @Test fun diskCacheHitIsNotNetworkSuccess() {
+        val f = Fixture(); f.store.playlists = saved
+        f.browser.playlists(refresh = false); f.flush()
+        assertTrue(f.playlistCalls.isEmpty())
+
+        f.browser.playlists(); f.flush()
+
+        assertEquals(1, f.playlistCalls.size)
+        assertTrue(f.browser.state.value.refreshing)
+    }
+
+    @Test fun rejectedOldQueryResponseCannotThrottleNewQuery() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        val old = f.playlistCalls.single()
+        f.browser.tracks(playlist); f.flush()
+
+        old(Result.success(fresh)); f.flush()
+        f.browser.playlists(); f.flush()
+
+        assertEquals(2, f.playlistCalls.size)
+        assertTrue(f.browser.state.value.refreshing)
     }
 
     @Test fun blockedDiskReadCannotBlockCancelOrAccountChangeAndCannotDeliverOldData() {

@@ -43,6 +43,13 @@ fun AccountScreen(
     onSignOut: (Platform) -> Unit,
     /** Netease only: the gallery-QR fallback when the web page cannot be used. Null hides it. */
     onConnectNeteaseScanner: (() -> Unit)? = null,
+    /** Empty hides the About group. */
+    appVersion: String = "",
+    update: AboutUpdateUi = AboutUpdateUi(
+        developmentBuild = false, checking = false, checkNote = null, release = null,
+        autoCheck = null, badge = false,
+    ),
+    updateActions: UpdateActions = UpdateActions(),
 ) {
     val cs = MaterialTheme.colorScheme
     var managing by remember { mutableStateOf<Platform?>(null) }
@@ -101,7 +108,12 @@ fun AccountScreen(
             "播放由本机直连平台。",
             style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
         )
-        Spacer(Modifier.height(Space.section))
+        if (appVersion.isNotEmpty()) {
+            Spacer(Modifier.height(Space.section))
+            AboutSection(version = appVersion, ui = update, actions = updateActions)
+        }
+        // Clears the floating dock, so the last group can scroll above it.
+        Spacer(Modifier.height(Space.section + bottomInset))
     }
 
     managing?.let { platform ->

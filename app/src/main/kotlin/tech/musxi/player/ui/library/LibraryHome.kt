@@ -1,7 +1,9 @@
 package tech.musxi.player.ui.library
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,17 +25,27 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import tech.musxi.core.library.PlaylistKind
 import tech.musxi.core.library.PlaylistSummary
 import tech.musxi.core.library.SongSummary
 import tech.musxi.core.playback.PlaybackJournalState
+import tech.musxi.player.ui.components.AnchoredMenu
 import tech.musxi.player.ui.components.Cover
+import tech.musxi.player.ui.components.MenuAlign
+import tech.musxi.player.ui.components.MenuItem
 import tech.musxi.player.ui.components.ProgressArc
 import tech.musxi.player.ui.components.pressableRow
 import tech.musxi.player.ui.model.formatDuration
@@ -101,13 +113,18 @@ internal fun libraryHomeUiOf(
 /**
  * Whether [p] is the user's own "liked songs" list.
  *
- * Temporary rule: the backend does not yet say what kind of playlist this is, so it goes by name.
- * 网易云 calls it "<nickname>喜欢的音乐", QQ音乐 and 酷狗 "我喜欢". A user playlist that happens to be
- * named like this would be promoted too. Replace with the backend's `kind` field once it exists.
+ * The backend's [PlaylistKind] decides. Only [PlaylistKind.OTHER] falls back to the name, because
+ * caches written before the backend sent `kind` have every playlist as OTHER. 网易云 calls it
+ * "<nickname>喜欢的音乐", QQ音乐 and 酷狗 "我喜欢". A playlist of unknown kind that happens to be
+ * named like this is still promoted; that is the cost of the fallback.
  */
-internal fun isLikedPlaylist(p: PlaylistSummary): Boolean {
-    val title = p.title.filterNot { it.isWhitespace() }
-    return title == "我喜欢" || title == "我喜欢的音乐" || title.endsWith("喜欢的音乐")
+internal fun isLikedPlaylist(p: PlaylistSummary): Boolean = when (p.kind) {
+    PlaylistKind.LIKED -> true
+    PlaylistKind.OTHER -> {
+        val title = p.title.filterNot { it.isWhitespace() }
+        title == "我喜欢" || title == "我喜欢的音乐" || title.endsWith("喜欢的音乐")
+    }
+    PlaylistKind.CREATED, PlaylistKind.COLLECTED -> false
 }
 
 /**
@@ -171,7 +188,13 @@ fun ResumeCard(ui: ResumeUi, onResume: () -> Unit) {
  * horizontally; [LibraryContent] pads each of its other items individually instead.
  */
 @Composable
-fun RecentRow(songs: List<SongSummary>, nowPlayingId: String?, onPlay: (SongSummary) -> Unit) {
+fun RecentRow(
+    songs: List<SongSummary>,
+    nowPlayingId: String?,
+    onPlay: (SongSummary) -> Unit,
+    /** Long press on a cover offers to take the song off the strip. */
+    onRemoveRecent: (SongSummary) -> Unit = {},
+) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth()) {
         Text(
@@ -185,19 +208,37 @@ fun RecentRow(songs: List<SongSummary>, nowPlayingId: String?, onPlay: (SongSumm
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(songs) { song ->
-                RecentItem(song, playing = song.key.stableId == nowPlayingId) { onPlay(song) }
+                RecentItem(
+                    song,
+                    playing = song.key.stableId == nowPlayingId,
+                    onClick = { onPlay(song) },
+                    onRemove = { onRemoveRecent(song) },
+                )
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RecentItem(song: SongSummary, playing: Boolean, onClick: () -> Unit) {
+private fun RecentItem(song: SongSummary, playing: Boolean, onClick: () -> Unit, onRemove: () -> Unit) {
     val cs = MaterialTheme.colorScheme
+    val haptics = LocalHapticFeedback.current
+    var menuOpen by remember { mutableStateOf(false) }
+    // The menu anchors to this Box, which is exactly the cover and its title, so it opens over the item.
+    Box(Modifier.width(96.dp)) {
     Column(
-        Modifier.width(96.dp)
+        Modifier.fillMaxWidth()
             .clip(MaterialTheme.shapes.medium)
-            .clickable(role = Role.Button, onClick = onClick),
+            .combinedClickable(
+                role = Role.Button,
+                onClick = onClick,
+                onLongClickLabel = "移除最近播放",
+                onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    menuOpen = true
+                },
+            ),
     ) {
         Cover(
             seed = song.key.stableId,
@@ -217,6 +258,16 @@ private fun RecentItem(song: SongSummary, playing: Boolean, onClick: () -> Unit)
             style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
+    }
+    AnchoredMenu(expanded = menuOpen, onDismiss = { menuOpen = false }, align = MenuAlign.START) {
+        MenuItem(
+            "从最近播放中移除",
+            onClick = {
+                menuOpen = false
+                onRemove()
+            },
+        )
+    }
     }
 }
 

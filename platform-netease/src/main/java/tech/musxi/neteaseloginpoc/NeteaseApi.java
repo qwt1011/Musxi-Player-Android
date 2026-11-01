@@ -53,6 +53,10 @@ public final class NeteaseApi {
     static final String SET_LIKE = "https://interfacepc.music.163.com/eapi/radio/like";
     static final String PLAYLIST_TRACKS =
             "https://interfacepc.music.163.com/eapi/playlist/manipulate/tracks";
+    static final String MEMBERSHIP = ORIGIN + "/weapi/music-vip-membership/front/vip/info";
+    static final String ARTIST_TRACKS =
+            "https://interfacepc.music.163.com/eapi/v1/artist/songs";
+    static final String ALBUM_TRACKS = ORIGIN + "/weapi/v1/album/";
     private final Transport transport;
     private final SecureRandom random = new SecureRandom();
     private final String deviceId = java.util.UUID.randomUUID().toString().replace("-", "");
@@ -98,6 +102,17 @@ public final class NeteaseApi {
         public final int status;
         public final Session session;
         private Poll(int status, Session session) { this.status = status; this.session = session; }
+    }
+    public static final class Membership {
+        /** 1 confirmed active, 0 confirmed inactive, -1 insufficient or invalid data. */
+        public final int isVip;
+        public final Long expiresAtEpochMs;
+        public Membership(int isVip, Long expiresAtEpochMs) {
+            if (isVip < -1 || isVip > 1)
+                throw new IllegalArgumentException("Unsupported membership state");
+            this.isVip = isVip;
+            this.expiresAtEpochMs = expiresAtEpochMs;
+        }
     }
     public enum ProbeResult { ACCEPTED, REJECTED }
     public static final class ApiException extends IOException {
@@ -176,13 +191,56 @@ public final class NeteaseApi {
         parseIdentity(response.body, probe);
         return ProbeResult.ACCEPTED;
     }
+    /** Fixed read-only membership query. Failure is isolated from account-session validity. */
+    public Membership membership(Session session) throws IOException {
+        if (session == null || !validId(session.userId))
+            throw error("credentials", "Missing authenticated session");
+        JSONObject body = authenticatedCall(MEMBERSHIP,
+            object("userId", session.userId), session);
+        return membershipFromResponse(body);
+    }
+
+    static Membership membershipFromResponse(JSONObject body) throws IOException {
+        if (body == null) throw error("protocol", "Membership response is null");
+        JSONObject data = body.optJSONObject("data");
+        if (data == null) data = body;
+        String[] products = {"redplus", "associator", "musicPackage"};
+        Long best = null;
+        boolean allComplete = true, anyFuture = false;
+        long now = System.currentTimeMillis();
+        for (String product : products) {
+            JSONObject value = data.optJSONObject(product);
+            if (value == null && product.startsWith("music"))
+                value = data.optJSONObject("music_package");
+            Long expiry = value == null ? null : parseExpiry(value.opt("expireTime"));
+            if (expiry == null) allComplete = false;
+            else {
+                if (best == null || expiry > best) best = expiry;
+                if (expiry > now) anyFuture = true;
+            }
+        }
+        if (anyFuture) return new Membership(1, best);
+        if (allComplete) return new Membership(0, best);
+        return new Membership(-1, best);
+    }
+
+    private static Long parseExpiry(Object value) {
+        if (!(value instanceof Number) && !(value instanceof String)) return null;
+        String text = String.valueOf(value).trim();
+        if (!text.matches("[0-9]{1,13}")) return null;
+        try {
+            long raw = Long.parseLong(text);
+            if (raw == 0) return 0L;
+            return raw < 100_000_000_000L ? Math.multiplyExact(raw, 1000L) : raw;
+        } catch (ArithmeticException | NumberFormatException invalid) {
+            return null;
+        }
+    }
+
     /** Internal authenticated read-only API. Credential serialization never crosses the platform module. */
     JSONObject authenticatedCall(String endpoint, JSONObject input, Session session) throws IOException {
         if (session == null || !validId(session.userId)) throw error("credentials", "请先完成网易云登录");
-        if (!USER_PLAYLIST.equals(endpoint) && !PLAYLIST_DETAIL.equals(endpoint)
-                && !SONG_DETAIL.equals(endpoint) && !SONG_URL.equals(endpoint) && !SEARCH.equals(endpoint)
-                && !LYRIC.equals(endpoint) && !LIKED_IDS.equals(endpoint) && !SET_LIKE.equals(endpoint)
-                && !PLAYLIST_TRACKS.equals(endpoint))
+        if (!allowedLibraryEndpoint(endpoint))
             throw error("endpoint", "请求目标不在允许的网易云官方接口范围内");
         Response response = call(endpoint, input, session.cookies);
         if (!LYRIC.equals(endpoint)) requireSuccess(response.body);
@@ -347,13 +405,20 @@ public final class NeteaseApi {
     static void requireEndpoint(URL url) throws IOException {
         String endpoint = url.getProtocol() + "://" + url.getHost() + url.getPath();
         if ((!KEY.equals(endpoint) && !POLL.equals(endpoint) && !STATUS.equals(endpoint)
-                && !USER_PLAYLIST.equals(endpoint) && !PLAYLIST_DETAIL.equals(endpoint)
-                && !SONG_DETAIL.equals(endpoint) && !SONG_URL.equals(endpoint) && !SEARCH.equals(endpoint)
-                && !LYRIC.equals(endpoint) && !LIKED_IDS.equals(endpoint) && !SET_LIKE.equals(endpoint)
-                && !PLAYLIST_TRACKS.equals(endpoint))
+                && !allowedLibraryEndpoint(endpoint))
                 || url.getUserInfo() != null
                 || url.getQuery() != null || url.getRef() != null || (url.getPort() != -1 && url.getPort() != 443))
             throw error("endpoint", "请求目标不在允许的网易云官方接口范围内");
+    }
+    private static boolean allowedLibraryEndpoint(String endpoint) {
+        if (USER_PLAYLIST.equals(endpoint) || PLAYLIST_DETAIL.equals(endpoint)
+                || SONG_DETAIL.equals(endpoint) || SONG_URL.equals(endpoint) || SEARCH.equals(endpoint)
+                || LYRIC.equals(endpoint) || LIKED_IDS.equals(endpoint) || SET_LIKE.equals(endpoint)
+                || PLAYLIST_TRACKS.equals(endpoint) || MEMBERSHIP.equals(endpoint)
+                || ARTIST_TRACKS.equals(endpoint)) return true;
+        return endpoint.startsWith(ALBUM_TRACKS)
+                && endpoint.length() > ALBUM_TRACKS.length()
+                && endpoint.substring(ALBUM_TRACKS.length()).matches("[1-9][0-9]{0,18}");
     }
     private static Response executeHttps(Request request) throws IOException {
         HttpsURLConnection connection = null;

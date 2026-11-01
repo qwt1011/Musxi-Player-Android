@@ -1,20 +1,34 @@
 package tech.musxi.player.ui.shell
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import tech.musxi.player.ui.player.MiniPlayer
 import tech.musxi.player.ui.player.MiniPlayerUi
+import tech.musxi.player.ui.player.MiniRowHeight
+import tech.musxi.player.ui.player.unclippedBoundsInRoot
 import tech.musxi.player.ui.theme.isDarkSurface
 
 /**
@@ -36,8 +50,20 @@ fun ShellDock(
     onPlayPause: () -> Unit = {},
     onPrevious: () -> Unit = {},
     onNext: () -> Unit = {},
+    notice: DockNoticeUi? = null,
+    onNoticeAction: () -> Unit = {},
+    /** Tabs that carry a small attention dot; handed to the tab bar unchanged. */
+    badges: Set<ShellTab> = emptySet(),
+    /**
+     * Set when the continuous player draws the mini row above the dock: the row's place stays empty
+     * here and its bounds (root pixels) are reported instead.
+     */
+    onMiniBounds: ((Rect) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
+    // Keeps the last notice on screen while its exit animation runs after notice becomes null.
+    val lastNotice = remember { mutableStateOf(notice) }
+    LaunchedEffect(notice) { if (notice != null) lastNotice.value = notice }
     val dark = cs.background.isDarkSurface()
     val shape = MaterialTheme.shapes.extraLarge
     // Light: a white card that floats with a soft, neutral black shadow. Dark: no shadow,
@@ -55,16 +81,37 @@ fun ShellDock(
         .background(dockColor())
         .then(if (dark) Modifier.border(1.dp, cs.outlineVariant.copy(alpha = 0.5f), shape) else Modifier)
     Column(container) {
+        AnimatedVisibility(
+            visible = notice != null,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            val ui = notice ?: lastNotice.value ?: return@AnimatedVisibility
+            Column {
+                DockNotice(ui = ui, onAction = onNoticeAction)
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    color = cs.outlineVariant.copy(alpha = if (dark) 0.5f else 0.35f),
+                )
+            }
+        }
         if (mini.visible) {
-            // The player sits inside the dock, so it must not draw its own container.
-            MiniPlayer(
-                ui = mini,
-                onExpand = onExpand,
-                onPlayPause = onPlayPause,
-                onPrevious = onPrevious,
-                onNext = onNext,
-                embedded = true,
-            )
+            if (onMiniBounds != null) {
+                Spacer(
+                    Modifier.fillMaxWidth().height(MiniRowHeight)
+                        .onGloballyPositioned { onMiniBounds(it.unclippedBoundsInRoot()) },
+                )
+            } else {
+                // The player sits inside the dock, so it must not draw its own container.
+                MiniPlayer(
+                    ui = mini,
+                    onExpand = onExpand,
+                    onPlayPause = onPlayPause,
+                    onPrevious = onPrevious,
+                    onNext = onNext,
+                    embedded = true,
+                )
+            }
             HorizontalDivider(
                 modifier = Modifier.padding(horizontal = 16.dp),
                 color = cs.outlineVariant.copy(alpha = if (dark) 0.5f else 0.35f),
@@ -75,6 +122,7 @@ fun ShellDock(
             onSelect = onSelect,
             shape = BarShape.FULL_WIDTH,
             embedded = true,
+            badges = badges,
         )
     }
 }

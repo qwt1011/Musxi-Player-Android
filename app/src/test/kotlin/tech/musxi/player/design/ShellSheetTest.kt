@@ -80,7 +80,7 @@ class ShellSheetTest {
         if (!out.exists()) return
         val bitmap = BitmapFactory.decodeFile(out.path)
         assertTrue("$name failed to decode", bitmap != null)
-        val background = parse(if (mode == ThemeMode.LIGHT) "#F7F7F5" else "#121212")
+        val background = parse(if (mode == ThemeMode.LIGHT) "#FAFAFA" else "#121212")
         val samples = IntArray(bitmap.width * bitmap.height)
         bitmap.getPixels(samples, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
         val bgShare = samples.count { it == background } / samples.size.toFloat()

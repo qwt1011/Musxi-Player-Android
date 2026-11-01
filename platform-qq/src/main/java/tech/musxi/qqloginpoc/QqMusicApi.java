@@ -84,6 +84,18 @@ public final class QqMusicApi {
         private Poll(int status, Session session) { this.status = status; this.session = session; }
     }
 
+    public static final class Membership {
+        /** 1 for an explicit positive status, 0 for an explicit non-member status, -1 when unknown. */
+        public final int isVip;
+        public final String name;
+        public final Long expiresAtEpochMs;
+        private Membership(int isVip, String name, Long expiresAtEpochMs) {
+            this.isVip = isVip;
+            this.name = name;
+            this.expiresAtEpochMs = expiresAtEpochMs;
+        }
+    }
+
     public enum ProbeResult { REJECTED, ACCEPTED }
 
     public static final class ApiException extends IOException {
@@ -234,6 +246,58 @@ public final class QqMusicApi {
         }
     }
 
+    /** Read-only membership lookup using the fixed VipLogin CGI. */
+    public Membership membership(Session session) throws IOException {
+        if (session == null) throw error("credentials", "缺少 QQ 音乐会话");
+        JSONObject data = cgi("VipLogin.VipLoginInter", "vip_login_base", new JSONObject(), session);
+        JSONObject identity = data.optJSONObject("identity");
+        JSONObject userInfo = data.optJSONObject("userinfo");
+
+        Integer svip = integerField(data, "svip");
+        Integer star = integerField(data, "star");
+        Integer ystar = integerField(data, "ystar");
+        Integer hugeVip = integerField(identity, "HugeVip", "huge_vip");
+        Integer vip = integerField(identity, "vip");
+        Integer groupVip = integerField(identity, "GroupVipFlag", "group_vip_flag");
+        Integer cpLover = integerField(identity, "CPLoverFlag", "cp_lover_flag");
+        Integer childVip = integerField(identity, "ChildVip", "child_vip");
+        Integer expVip = integerField(identity, "ExpVip", "exp_vip");
+        Integer adVip = integerField(identity, "AdVipFlag", "ad_vip_flag");
+        Integer twelve = integerField(identity, "twelve");
+        Integer eight = integerField(identity, "eight");
+
+        if (positive(svip))
+            return new Membership(1, "超级会员", expiry(explicitOrFallback(userInfo, null, "expire")));
+        if (positive(star) || positive(ystar)) {
+            Object end = firstTruthy(field(data, "starend"), field(data, "star_end"));
+            if (!truthy(end)) end = firstTruthy(field(data, "ystarend"), field(data, "ystar_end"));
+            if (!truthy(end)) end = field(userInfo, "expire");
+            return new Membership(1, "星级会员", expiry(end));
+        }
+        if (positive(hugeVip))
+            return new Membership(1, "豪华绿钻", expiry(explicitOrFallback(identity, userInfo,
+                "HugeVipEnd", "huge_vip_end")));
+        if (positive(vip))
+            return new Membership(1, "绿钻会员", expiry(field(userInfo, "expire")));
+        if (positive(groupVip))
+            return new Membership(1, "家庭会员", expiry(explicitOrFallback(identity, userInfo,
+                "GroupVipEnd", "group_vip_end")));
+        if (positive(cpLover))
+            return new Membership(1, "情侣会员", expiry(explicitOrFallback(identity, userInfo,
+                "CPLoverEnd", "cp_lover_end")));
+        if (positive(childVip)) return new Membership(1, "儿童会员", expiry(field(userInfo, "expire")));
+        if (positive(expVip)) return new Membership(1, "体验会员", expiry(field(userInfo, "expire")));
+        if (positive(adVip)) return new Membership(1, "广告会员", expiry(field(userInfo, "expire")));
+        if (positive(twelve))
+            return new Membership(1, "十二平台会员", expiry(explicitOrFallback(identity, userInfo,
+                "twelveEnd", "twelve_end")));
+        if (positive(eight))
+            return new Membership(1, "八平台会员", expiry(explicitOrFallback(identity, userInfo,
+                "eightEnd", "eight_end")));
+        if (isZero(vip) && isZero(hugeVip)) return new Membership(0, "非会员", null);
+        return new Membership(-1, null, null);
+    }
+
     // Package-private bounded music surface. Writes are one-song AddSonglist plus favorite add/delete.
     JSONObject library(Session session, String module, String method, JSONObject param) throws IOException {
         String endpoint = module + ":" + method;
@@ -242,6 +306,8 @@ public final class QqMusicApi {
             "music.musicasset.PlaylistBaseRead:GetPlaylistByUin",
             "music.musicasset.PlaylistFavRead:CgiGetPlaylistFavInfo",
             "music.srfDissInfo.DissInfo:CgiGetDiss",
+            "musichall.song_list_server:GetSingerSongList",
+            "music.musichallAlbum.AlbumSongList:GetAlbumSongList",
             "music.search.SearchCgiService:DoSearchForQQMusicMobile",
             "music.pf_song_detail_svr:get_song_detail_yqq",
             "music.musichallSong.PlayLyricInfo:GetPlayLyricInfo",
@@ -488,6 +554,56 @@ public final class QqMusicApi {
     }
     private static String scalar(JSONObject value, String key) {
         Object raw = value.opt(key); return raw instanceof String || raw instanceof Number ? String.valueOf(raw) : "";
+    }
+    private static Integer integerField(JSONObject value, String... names) {
+        if (value == null) return null;
+        for (String name : names) {
+            Object raw = value.opt(name);
+            if (raw instanceof Number) {
+                double number = ((Number)raw).doubleValue();
+                if (Double.isFinite(number) && number == Math.rint(number) &&
+                    number >= Integer.MIN_VALUE && number <= Integer.MAX_VALUE) return (int)number;
+            }
+        }
+        return null;
+    }
+    private static boolean positive(Integer value) { return value != null && value > 0; }
+    private static boolean isZero(Integer value) { return value != null && value == 0; }
+    private static Object field(JSONObject value, String... names) {
+        if (value == null) return null;
+        for (String name : names) if (value.has(name)) return value.opt(name);
+        return null;
+    }
+    private static Object explicitOrFallback(JSONObject explicit, JSONObject fallback, String... names) {
+        Object value = field(explicit, names);
+        return truthy(value) ? value : field(fallback, "expire");
+    }
+    private static Object firstTruthy(Object first, Object second) {
+        return truthy(first) ? first : second;
+    }
+    private static boolean truthy(Object value) {
+        if (value == null || JSONObject.NULL.equals(value)) return false;
+        if (value instanceof String) return !((String)value).trim().isEmpty();
+        return !(value instanceof Number) || ((Number)value).doubleValue() != 0;
+    }
+    private static Long expiry(Object value) {
+        if (!truthy(value)) return null;
+        String raw = String.valueOf(value).trim();
+        long result;
+        try {
+            if (raw.matches("[0-9]{10}|[0-9]{13}")) {
+                result = Long.parseLong(raw);
+                if (raw.length() == 10) result *= 1000;
+            } else if (raw.matches("[0-9]{8}")) {
+                result = java.time.LocalDate.parse(raw, java.time.format.DateTimeFormatter.BASIC_ISO_DATE)
+                    .atStartOfDay(java.time.ZoneOffset.ofHours(8)).toInstant().toEpochMilli();
+            } else {
+                return null;
+            }
+        } catch (NumberFormatException | java.time.DateTimeException invalid) {
+            return null;
+        }
+        return result > 0 && result <= 253402300799999L ? result : null;
     }
     private static JSONObject object(Object... pairs) throws IOException {
         JSONObject out = new JSONObject();

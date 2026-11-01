@@ -46,6 +46,12 @@ private data class FreshQuery(
     val query: LibraryQuery,
 )
 
+private data class NetworkQuery(
+    val owner: String,
+    val generation: Long,
+    val query: LibraryQuery,
+)
+
 /** Process-owned cache-first page reader. All entrypoints/delivery run on the UI executor.
  * The separate IO executor never needs to wait for an account network verification.
  */
@@ -66,15 +72,28 @@ class LibraryBrowser(
     private var queryOwner: String? = null
     private var invalidatedOwner: String? = null
     private val freshQueries = mutableMapOf<FreshQuery, Long>()
+    private val networkCompletions = mutableMapOf<NetworkQuery, Long>()
     private val mutable = MutableStateFlow(LibraryBrowseState())
     val state = mutable.asStateFlow()
 
     fun playlists(offset: Int = 0, refresh: Boolean = true) = open(LibraryQuery(offset = offset), refresh)
     fun tracks(playlist: MediaKey, offset: Int = 0, refresh: Boolean = true) = open(LibraryQuery(playlist, offset), refresh)
-    fun refresh() = open(state.value.query, true)
+    fun refresh() = open(state.value.query, refresh = true, bypassRecentSuccess = true)
+    fun retry() = open(state.value.query, refresh = true, bypassRecentSuccess = true)
 
     /** Does not modify account state or erase disk metadata. */
     fun cancel() = synchronized(gate) { ++revision; mutable.value = mutable.value.copy(refreshing = false) }
+
+    /** For explicit cache maintenance: fence old responses, without starting another fetch. */
+    fun clearCachedPages() = synchronized(gate) {
+        ++revision
+        ++invalidationRevision
+        freshQueries.clear()
+        networkCompletions.clear()
+        invalidatedOwner = owner?.owner
+        mutable.value = LibraryBrowseState(query = mutable.value.query,
+            accountVerified = identity()?.verified == true, invalidationRevision = invalidationRevision)
+    }
 
     /**
      * Marks the current platform's pages stale. A favorite burst can defer the read until the
@@ -89,6 +108,7 @@ class LibraryBrowser(
             ++revision
             invalidatedOwner = latest.owner
             freshQueries.clear()
+            networkCompletions.clear()
             // Account collection can still be queued on main; never retain another owner's page.
             if (!latest.sameAttempt(owner)) {
                 mutable.value = LibraryBrowseState(
@@ -123,16 +143,21 @@ class LibraryBrowser(
         val query = synchronized(gate) {
             if (next != null && queryOwner != null && queryOwner != next.owner) LibraryQuery() else state.value.query
         }
-        open(query, refresh = next?.verified == true)
+        open(query, refresh = next?.verified == true, bypassRecentSuccess = true)
     }
 
-    private fun open(query: LibraryQuery, refresh: Boolean) {
+    private fun open(
+        query: LibraryQuery,
+        refresh: Boolean,
+        bypassRecentSuccess: Boolean = false,
+    ) {
         require(query.playlist == null || query.playlist.platform == platform)
         val expected = identity()
         val token = synchronized(gate) {
             val keep = expected?.sameAttempt(owner) == true && mutable.value.query == query
             val previous = mutable.value
             if (!keep) freshQueries.clear()
+            if (expected?.sameAttempt(owner) != true) networkCompletions.clear()
             owner = expected
             if (expected != null) queryOwner = expected.owner
             mutable.value = if (keep) previous.copy(refreshing = refresh && expected!!.verified,
@@ -168,9 +193,16 @@ class LibraryBrowser(
                     accountVerified = identity()?.verified == true, storageError = storageFailed,
                     invalidationRevision = invalidationRevision,
                     stale = mutable.value.stale || pageIsStale)
-                if (refresh && identity()?.verified == true) fetchPage(token, expected, query)
-                else mutable.value = mutable.value.copy(refreshing = false,
-                    error = if (identity()?.verified != true) "account_unverified" else null)
+                val verified = identity()?.verified == true
+                if (refresh && verified &&
+                    (bypassRecentSuccess || !hasRecentNetworkSuccess(expected, query))) {
+                    fetchPage(token, expected, query)
+                } else {
+                    mutable.value = mutable.value.copy(
+                        refreshing = false,
+                        error = if (!verified) "account_unverified" else null,
+                    )
+                }
             }
         }
     }
@@ -183,29 +215,32 @@ class LibraryBrowser(
         fun accept(response: Result<LibraryContent>) {
             if (!current(token, expected)) return
             response.onSuccess { content ->
-                val fetchedAt = now().coerceAtLeast(0)
+                val completedAt = now().coerceAtLeast(0)
                 io {
                     var storageFailed = false
                     if (!current(token, expected)) return@io
                     try {
                         cacheAccess(expected) { store -> when (content) {
-                            is LibraryContent.Playlists -> store.writePlaylists(expected.owner, query.offset, SavedLibraryPage(content.page, fetchedAt))
-                            is LibraryContent.Tracks -> store.writeTracks(expected.owner, requireNotNull(query.playlist), query.offset, SavedLibraryPage(content.page, fetchedAt))
+                            is LibraryContent.Playlists -> store.writePlaylists(expected.owner, query.offset, SavedLibraryPage(content.page, completedAt))
+                            is LibraryContent.Tracks -> store.writeTracks(expected.owner, requireNotNull(query.playlist), query.offset, SavedLibraryPage(content.page, completedAt))
                         } }
                     } catch (_: Exception) { storageFailed = true }
                     deliver {
                         if (current(token, expected)) {
                             // A failed write leaves the old disk page stale on the next open.
-                            if (invalidationRevision > 0 && !storageFailed) {
-                                synchronized(gate) {
-                                    if (current(token, expected)) {
+                            synchronized(gate) {
+                                if (current(token, expected)) {
+                                    networkCompletions[
+                                        NetworkQuery(expected.owner, expected.generation, query)
+                                    ] = completedAt
+                                    if (invalidationRevision > 0 && !storageFailed) {
                                         freshQueries[FreshQuery(expected.owner, expected.generation, query)] =
                                             invalidationRevision
                                     }
                                 }
                             }
                             mutable.value = LibraryBrowseState(query, content, LibrarySource.NETWORK,
-                                fetchedAt, accountVerified = identity()?.verified == true,
+                                completedAt, accountVerified = identity()?.verified == true,
                                 storageError = storageFailed, invalidationRevision = invalidationRevision,
                                 stale = false)
                         }
@@ -225,6 +260,15 @@ class LibraryBrowser(
         } catch (_: Exception) { accept(Result.failure(LibraryPageFailure("unclassified"))) }
     }
 
+    private fun hasRecentNetworkSuccess(expected: LibraryCacheIdentity, query: LibraryQuery): Boolean =
+        synchronized(gate) {
+            val completedAt = networkCompletions[
+                NetworkQuery(expected.owner, expected.generation, query)
+            ] ?: return@synchronized false
+            val elapsed = now() - completedAt
+            elapsed in 0L until RECENT_NETWORK_SUCCESS_WINDOW_MS
+        }
+
     private fun isFresh(query: LibraryQuery, expected: LibraryCacheIdentity): Boolean = synchronized(gate) {
         expected.owner != invalidatedOwner || invalidationRevision == 0L ||
             freshQueries[FreshQuery(expected.owner, expected.generation, query)] == invalidationRevision
@@ -239,6 +283,7 @@ class LibraryBrowser(
     }))
 
     companion object {
+        private const val RECENT_NETWORK_SUCCESS_WINDOW_MS = 30_000L
         private val safeErrors = setOf("expired", "network", "risk", "rate", "protocol", "identity", "limit",
             "incomplete", "permission", "unavailable", "endpoint", "platform", "http", "timeout")
     }

@@ -9,6 +9,10 @@ enum class AccountPhase {
 
 enum class AccountError { NETWORK, EXPIRED, REJECTED, TIMEOUT, PLATFORM, STORAGE, OPEN_FAILED }
 
+enum class MembershipLevel { YES, NO, UNKNOWN }
+data class Membership(val level: MembershipLevel = MembershipLevel.UNKNOWN,
+    val name: String? = null, val expiresAtEpochMs: Long? = null)
+
 /** UI identity only. Credentials and login URLs must never enter account state. */
 data class AccountProfile(val platform: Platform, val id: String, val displayName: String) {
     override fun toString(): String = "AccountProfile(platform=$platform, identity=<redacted>)"
@@ -19,5 +23,6 @@ data class AccountState(
     val phase: AccountPhase,
     val profile: AccountProfile? = null,
     val error: AccountError? = null,
-    val generation: Long = 0
+    val generation: Long = 0,
+    val membership: Membership = Membership(),
 )

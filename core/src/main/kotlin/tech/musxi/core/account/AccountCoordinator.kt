@@ -18,6 +18,13 @@ class AccountCoordinator {
     )
     val states: StateFlow<Map<Platform, AccountState>> = mutableStates.asStateFlow()
 
+    fun membership(platform: Platform, expectedGeneration: Long, value: Membership): Boolean = synchronized(gate) {
+        val previous = state(platform)
+        if (previous.generation != expectedGeneration || previous.phase != AccountPhase.CONNECTED) return false
+        publish(previous.copy(membership = value))
+        true
+    }
+
     fun begin(platform: Platform): Long = synchronized(gate) {
         val previous = state(platform)
         // Superseding a live attempt must retain its original cancellation destination.

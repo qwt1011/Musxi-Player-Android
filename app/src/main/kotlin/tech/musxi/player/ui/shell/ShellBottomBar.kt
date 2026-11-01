@@ -88,6 +88,8 @@ fun ShellBottomBar(
     /** True when a dock already draws the container. */
     embedded: Boolean = false,
     mark: SelectionMark = SelectionMark.NONE,
+    /** Tabs that carry a small attention dot, such as an update nobody has looked at yet. */
+    badges: Set<ShellTab> = emptySet(),
 ) {
     val cs = MaterialTheme.colorScheme
     val pill = shape != BarShape.FULL_WIDTH
@@ -118,6 +120,7 @@ fun ShellBottomBar(
         ShellTab.entries.forEach { tab ->
             TabItem(
                 tab = tab, selected = tab == selected, compact = pill, mark = mark,
+                badge = tab in badges,
                 onSelect = { onSelect(tab) },
             )
         }
@@ -137,6 +140,7 @@ private fun TabItem(
     selected: Boolean,
     compact: Boolean,
     mark: SelectionMark,
+    badge: Boolean,
     onSelect: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -170,6 +174,13 @@ private fun TabItem(
                 if (selected) tab.selectedIcon else tab.unselectedIcon,
                 null, tint = tint, modifier = Modifier.size(24.dp),
             )
+            if (badge) {
+                // Corner of the 24dp icon, kept inside the 56x32 capsule so its clip does not cut the dot.
+                Box(
+                    Modifier.align(Alignment.TopEnd).padding(top = 3.dp, end = 12.dp)
+                        .size(8.dp).clip(CircleShape).background(cs.error),
+                )
+            }
         }
         Spacer(Modifier.height(3.dp))
         // labelMedium + Medium instead of labelSmall + Normal: at 11sp Normal the three labels read

@@ -528,9 +528,12 @@ class FileLyricsCacheStore(
         if (!Files.exists(ownerDirectory, LinkOption.NOFOLLOW_LINKS)) {
             Files.createDirectory(ownerDirectory)
         }
-        val expected = root.resolve(owner).normalize()
+        // Windows temp roots can contain 8.3 aliases (for example RUNNER~1). Compare
+        // against the real root so expanding an alias does not look like an escape.
+        val realRoot = root.toRealPath()
+        val expected = realRoot.resolve(owner).normalize()
         val actual = ownerDirectory.toRealPath(LinkOption.NOFOLLOW_LINKS).normalize()
-        if (actual.parent != root.toRealPath() || actual != expected || expected.parent != root) {
+        if (actual.parent != realRoot || actual != expected || expected.parent != realRoot) {
             throw IOException(UNAVAILABLE)
         }
         if (Files.isSymbolicLink(ownerDirectory) ||

@@ -9,6 +9,7 @@
 - [Android v0.2](android-v0.2-release.md)：正式发布说明、安装和已声明范围。
 - [正式签名与 Release 构建](release-build.md)：正式签名与构建说明。
 - [可复用验证工作流](validation-workflow.md)：本地/CI 入口、报告与边界。
+- [GitHub Actions 远端首跑](actions-first-run-20261103.md)：实际失败、短路径修复、通过轮次与报告核对记录。
 - [发布签名与私钥](signing-security.md)：公开证书、私钥保管及升级约束。
 - [MeiloX 与 Glasmio 参考阅读](reference-review-20261103.md)：固定快照及可借鉴实现。
 - [PC 能力对齐与后续推进](pc-capability-roadmap.md)：静态背景首版建议、已有能力收尾与实机基线顺序；尚未开始实现。

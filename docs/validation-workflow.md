@@ -34,7 +34,7 @@ GitHub Actions 是仓库中的自动任务执行服务：触发后由 GitHub 提
 
 查看仓库 Actions 页的 `Android verification`；需要重跑同一提交时使用运行详情中的 Re-run jobs，需要验证所选分支时使用 Run workflow。失败先看具体步骤与 `build.log`，再读取该次 Artifact 的 `summary.json`、源码清单及模块报告。报告保留期为 14 天，有效交付证据需另存项目 `.local/artifacts/` 并记录运行 URL、提交与 attempt。缓存仅用于加速，完整入口仍强制执行本轮 JVM 测试。
 
-文件提交推送后才会在 GitHub 执行。本机结果不能记作 Actions 已通过；首次远端执行还需检查 SDK 获取、runner 和报告上传。分支保护需要另在仓库设置中选择 `verify` 检查，不由 YAML 自动完成。
+2026-11-03 已完成 [远端首跑联调](actions-first-run-20261103.md)：首次失败暴露的短路径问题修复后，提交 `d2e0018` 的 [运行 41559846988](https://github.com/qwt1011/Musxi-Player-Android/actions/runs/41559846988) 构建、1599 项 JVM 测试、Lint 与报告上传全部通过；报告下载核实完成。本机和远端结果分别留证，不能互相替代。分支保护需要另在仓库设置中选择 `verify` 检查，不由 YAML 自动完成，本轮没有修改分支保护设置。
 
 ## 设备与发布
 

@@ -51,7 +51,7 @@ Windows 中文路径请使用此脚本，保留 Gradle daemon 的系统默认编
 
 输出为 `app/build/outputs/apk/debug/app-debug.apk`，debug 包名为 `tech.musxi.player.dev`。`-Install` 覆盖安装并打开正式 MainActivity；请勿卸载或清除数据来更新已有测试安装。
 
-完整验证使用 PowerShell 7，共用任务图编译应用和设备测试包、执行全部 JVM 测试与 Lint，保存源码散列、计数和包哈希。设备测试包编译不代表实机验收。GitHub Actions 使用同一入口，范围与报告见 [验证工作流](docs/validation-workflow.md)。
+完整验证使用 PowerShell 7，共用任务图编译应用和设备测试包、执行全部 JVM 测试与 Lint，保存源码散列、计数和包哈希。设备测试包编译不代表实机验收。GitHub Actions 使用同一入口；[远端首跑联调](docs/actions-first-run-20261103.md) 已完成，修复短路径问题后 1599 项测试通过、Lint 0 错误/126 警告，报告上传下载已核实。范围与操作见 [验证工作流](docs/validation-workflow.md)。
 
 ## 工程与文档
 

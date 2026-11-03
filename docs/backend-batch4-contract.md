@@ -1,5 +1,7 @@
 # 第四批后端接口（2026-11-01）
 
+> **状态：现行第四批增量接口合同。** 本文定义设置、会员、搜索、缓存和换源的接口职责；交付与设备结果见 [第四批交付](backend-batch4-delivery-20261101.md) 和 [设备追加验收](backend-batch4-device-acceptance-20261101.md)。当前待办见 [当前开发接续](next-session-handoff.md)。
+
 本文描述本批新增合同。构建和真机结论以交付记录为准；接口存在不代表所有平台已完成在线验收。
 
 - `app.settings: StateFlow<AppSettings>`；命令在 `app.settingsRepository`。持久化主题 `SYSTEM/LIGHT/DARK`、透明、自动换源、放宽时长、默认音质、歌词字号 `SMALL/MEDIUM/LARGE`、配色 `COVER/FIXED`、译文 `AUTO/SHOW/HIDE`。使用 `setThemeMode`、`setTransparencyEnabled`、`setAutoSwitchSource`、`setRelaxSourceDuration`、`setDefaultQuality`、`setLyricsFontSize`、`setLyricsColorMode`、`setLyricsTranslationPreference`，或 `update { copy(...) }`。命令保存失败会抛异常，状态不先行变化；调用方应在 IO 线程执行并处理失败。`MainActivity` 已跟随主题，透明和歌词视觉由前端接线。
@@ -28,5 +30,7 @@
 统计为可回收的磁盘文件字节数，不包含内存、目录文件系统开销、更新 APK 或登录网页缓存。封面使用当前 Coil 单例的磁盘/内存清理 API；歌词限 `lyrics-cache-v1`，曲库限三平台 `*-library-pages-v1`。清理也释放相关进程内页面/歌词缓存并使先前请求失效，不主动重新抓取。仍在显示的图片或当前歌曲后续读取可以自然生成新缓存，占用不保证一直为零。
 
 账号、Cookie/会话、设置、手动歌词绑定、收藏、最近播放、保存队列、位置和播放日志都保留。不得复用退出账号的 `clearLibraryCache`，也不得递归清空 `cacheDir`、`filesDir` 或 `noBackupFilesDir`。原统一设置入口继续使用，不另建存储。
+
+> 历史实施备注：以下是第四批当时的升级安排。升级及后续回归已在第五批发生，不能作为当前工具链待办。
 
 折射已由产品负责人确定。当前主目录仍为 Kotlin 2.2.21；CC 会在第四批存档后升级到 2.3.21 并引入 Backdrop 2.0.0-alpha03。整合后须以实际新代码和新包重新跑后端全量与真机回归，不沿用升级前的冻结结论。

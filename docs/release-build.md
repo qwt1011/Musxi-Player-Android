@@ -73,4 +73,4 @@ $env:ANDROID_HOME = 'C:\path\to\android-sdk'
 - `-Release -Install` 安装并启动 `tech.musxi.player`，不会启动 debug 的
   `tech.musxi.player.dev`。
 
-应用内更新与安装接口见 [安卓更新接口](android-app-updates.md)。构建锁由调用方统一管理；脚本不内置第二层锁。
+应用内更新见 [安卓更新接口](android-app-updates.md)，公钥证书与私钥的区别见 [签名说明](signing-security.md)。`build.ps1` 已内置主目录/辅助工作树共享文件锁，进程结束自动释放；不再使用按时间删除锁的旧包装器。完整验证入口见 [验证工作流](validation-workflow.md)。

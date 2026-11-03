@@ -14,7 +14,7 @@
 | QQ 协议、曲库、搜索、取流、收藏同步 | qqmusic-api-python 0.8.1 / L-1124/QQMusicApi，3fc57f02e4eddb68a069bba4e0e12a7893f2a814，Luren，GPL-3.0-or-later | [platform-qq-NOTICE.txt](platform-qq/src/main/assets/platform-qq-NOTICE.txt)、同目录 licenses/ |
 | 网易云协议、曲库、搜索、取流、收藏同步 | NeteaseCloudMusicApiEnhanced/api-enhanced，2aab9957dfd5231e5b192aecdb177f93ace4c92e，Copyright (c) 2013-2022 Binaryify，MIT | [platform-netease-NOTICE.txt](platform-netease/src/main/assets/platform-netease-NOTICE.txt)、同目录 licenses/ |
 | QR 生成 | Project Nayuki QR-Code-generator，3c6d0b3cefb4e049dc337e82237c9644399716a8，MIT | platform-netease 原源码头及 assets/licenses/QR-Code-generator-MIT.txt |
-| Kotlin 2.2.21、coroutines 1.10.2 | JetBrains，Apache-2.0 | app/src/main/assets/licenses/ |
+| Kotlin 2.3.21、coroutines 1.10.2 | JetBrains，Apache-2.0 | app/src/main/assets/licenses/ |
 | AndroidX / Media3 1.8.0 | Android Open Source Project，Apache-2.0 | app/src/main/assets/licenses/AndroidX-Apache-2.0.txt |
 | Coil 3 3.3.0（io.coil-kt.coil3:coil-compose / coil-network-okhttp，封面图片加载；会引入 OkHttp 与 Okio，均为 Apache-2.0） | Coil Contributors，Apache-2.0 | 许可文本复用 app/src/main/assets/licenses/AndroidX-Apache-2.0.txt；OkHttp、Okio 同为 Apache-2.0，沿用同一文本 |
 | Haze 1.6.10（dev.chrisbanes.haze:haze，用于浮卡、菜单、Sheet 等控件层的液态玻璃材质，见 ui/components/Glass.kt；不支持实时模糊时退回实色） | Chris Banes，Apache-2.0 |

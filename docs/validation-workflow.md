@@ -1,0 +1,39 @@
+# 可复用验证工作流
+
+状态：2026-11-03 建立。当前产品与待验范围见 [开发接续](next-session-handoff.md)，完整资料见 [文档入口](README.md)。
+
+## 唯一完整验证入口
+
+Windows PowerShell 7、JDK 17、Android SDK 36：
+
+```powershell
+pwsh -NoProfile -File scripts/verify.ps1
+```
+
+`JAVA_HOME` 指向 JDK 17；`ANDROID_HOME` 或 `ANDROID_SDK_ROOT` 指向 Android SDK。安装 `platforms;android-36`、`build-tools;35.0.0` 和 `build-tools;36.0.0`。Gradle wrapper 固定为 8.13，并校验发行包 SHA-256；AGP、Kotlin 与依赖版本沿用工程配置。不要强制 Windows Gradle daemon 使用 UTF-8，源码与测试内容已有独立编码设置。
+
+脚本执行文档相对链接检查和根任务 `:verifyAndroid`。任务通过模块插件汇集所有 JVM 测试和 Android Lint，并编译 debug 主包与 androidTest 包。新增同类模块自动进入任务图，不重复维护 CI 模块清单。设备测试包只编译，不安装、不执行。
+
+完整验证强制重跑 JVM 测试，不接受上次测试的缓存命中；编译和 Lint 可复用 Gradle 判断仍有效的输出。每模块必须产生本轮 JUnit XML，测试数大于零，失败/错误/跳过均为零。Lint 错误使验证失败，警告按模块保留。
+
+源码编辑停止后再运行。入口记录 Git HEAD、未提交文件状态与逐文件 SHA-256，结束前再次核对；期间改动源码或文档，本次结果失败。所有 `build.ps1` 调用共享操作系统文件锁，报告采集也在锁内；进程结束自动释放，不按锁年龄删除活跃构建。旧 `.local/tmp/*build*.sh` 不再作为推荐入口。直接调用 Gradle 不参与锁，不能与验证同时运行。
+
+## 证据与失败处理
+
+每轮独立目录为 `.local/artifacts/verification/<UTC时间>-<进程号>/`，保存 `summary.json`、`source-files.json`、`build.log` 和 `reports/<模块>/`。摘要包含源码身份、时间、实际测试数、Lint 计数、APK SHA-256 与结果；`deviceTestsExecuted=false` 表示没有设备验收。
+
+失败同样写摘要，不用旧目录或模块 build 中残留报告替代；构建日志与 XML/HTML 用来定位失败，不能把部分通过拼成整包通过。证据目录排除 Git。
+
+小改可用 `build.ps1 -Test` 或 `-Lint` 做局部反馈；`build.ps1 -Test -Lint` 使用同一完整任务图，但只有 `scripts/verify.ps1` 提供强制新测试、源码核对和独立证据。截图用例执行不等于视觉基线比较，JVM 通过不等于真实后台播放或听音通过。
+
+## GitHub Actions
+
+[android-verify.yml](../.github/workflows/android-verify.yml) 在 main 推送、PR 和手动触发时使用相同入口，采用 Windows 2025、Microsoft JDK 17、SDK 36。第三方 Action 固定完整提交，权限为 `contents: read`，PR 缓存只读；不需要正式密钥。失败也上传报告，保留 14 天。
+
+文件提交推送后才会在 GitHub 执行。本机结果不能记作 Actions 已通过；首次远端执行还需检查 SDK 获取、runner 和报告上传。分支保护需要另在仓库设置中选择 `verify` 检查，不由 YAML 自动完成。
+
+## 设备与发布
+
+真实账号、网络取流、焦点、长后台、来电和回收需要专项实机验收。记录包哈希、设备/系统、账号权益、步骤、实际声音和收尾状态，不恢复历史队列、不借旧授权改账号或收藏。
+
+正式发布另用 [Release 构建](release-build.md) 与 [签名说明](signing-security.md)，沿用原正式密钥；持续集成不自动签正式包、推送、合并或发布。

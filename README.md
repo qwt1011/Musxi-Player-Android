@@ -2,7 +2,7 @@
 
 Musxi Player 的原生安卓开发项目，PC 来源：[Miloscovo/Musxi-Player](https://github.com/Miloscovo/Musxi-Player)。安卓仓库：[qwt1011/Musxi-Player-Android](https://github.com/qwt1011/Musxi-Player-Android)。保留原项目版权、许可和素材来源。
 
-上游代码进展：[PR #25](https://github.com/Miloscovo/Musxi-Player/pull/25) 和 [PR #26](https://github.com/Miloscovo/Musxi-Player/pull/26) 已合入 android/development；Android v0.2 的源码继续提交到该分支。
+上游代码进展：Android v0.2 的 [PR #28](https://github.com/Miloscovo/Musxi-Player/pull/28) 已于北京时间 2026-11-02 合入 `android/development`，文件树与本仓库 v0.2 一致。当前工作与验证边界见 [开发接续](docs/next-session-handoff.md)，历史资料见 [文档入口](docs/README.md)。
 
 当前版本为 **Android v0.2（`0.2.0`，versionCode 5）**，仍在持续完善。[下载安装包及校验文件](https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.2)，支持 Android 8.0 / API 26 及以上。此版启用正式包名 `tech.musxi.player` 和长期发布签名，与旧版 `.dev` 测试包并存；两者的账号、设置和队列各自保存。发布内容、安装与验证范围见 [v0.2 发布说明](docs/android-v0.2-release.md)。
 
@@ -43,13 +43,15 @@ Musxi Player 的原生安卓开发项目，PC 来源：[Miloscovo/Musxi-Player](
 需要 JDK 17、Android SDK 36；将 `JAVA_HOME` 指向 JDK，将 `ANDROID_HOME` 或 `ANDROID_SDK_ROOT` 指向 SDK。Gradle 8.13、AGP 8.13.2、Kotlin 2.3.21；首次构建需下载依赖。
 
 ```powershell
-./build.ps1 -Test -Lint
+pwsh -NoProfile -File scripts/verify.ps1
 ./build.ps1 -Install
 ```
 
 Windows 中文路径请使用此脚本，保留 Gradle daemon 的系统默认编码；不要强制 daemon UTF-8，以免 JDK 17 测试参数文件误读 classpath。其他环境可使用 Gradle wrapper，例如 `./gradlew :app:assembleDebug :core:test`。
 
 输出为 `app/build/outputs/apk/debug/app-debug.apk`，debug 包名为 `tech.musxi.player.dev`。`-Install` 覆盖安装并打开正式 MainActivity；请勿卸载或清除数据来更新已有测试安装。
+
+完整验证使用 PowerShell 7，共用任务图编译应用和设备测试包、执行全部 JVM 测试与 Lint，保存源码散列、计数和包哈希。设备测试包编译不代表实机验收。GitHub Actions 使用同一入口，范围与报告见 [验证工作流](docs/validation-workflow.md)。
 
 ## 工程与文档
 

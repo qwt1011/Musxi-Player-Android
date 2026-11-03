@@ -1,5 +1,7 @@
 # 歌词翻译接线契约：三平台已接入（2026-10-22 本轮状态校准）
 
+> **状态：现行歌词与译文合同，含 2026-10-22 状态校准。** 三平台接入范围、结构化文档和失败语义可作接口依据；包、设备和测试数只对应文中日期。当前未决场景见 [当前开发接续](next-session-handoff.md)，其他文档见 [文档入口](README.md)。
+
 2026-10-22 B1-08 最新：前台资格门禁已实现并同步主工程，先由 Media3 建立前台服务，再单次请求音频焦点；等待最多3秒，暂停/停止/换队列使旧请求失效，系统拒绝前台启动时返回 `BACKGROUND_RESTRICTED`，须前台明确重试。隔离后端392项、主工程515项测试全通过，Lint均无错误（分别9/76条警告，范围不同）。最终后端包酷狗实际播放、受控超时/暂停取消/显式重试通过；最终包两次真实QQ→网易云换源均因NETWORK停止，未将完整闭环记为通过。前一候选包后台换源及用户听音证据保留其包归属。见[B1-08修复与验收](backend-b108-acceptance-20261022.md)。
 
 2026-10-22。网易云 `tlyric.lyric`、QQ 同响应 `trans` 和酷狗 KRC `language` 均已接入，三平台可返回行级译文。前端继续使用同一套 LyricLine.translation、translation 状态和 activeIndex。已实现原文先显示、译文随后补入及独立刷新；新增入口见下文，今晚记录见 [后端补验](backend-evening-acceptance-20261022.md)。原文接口与来源规则沿用 [P1](frontend-backend-contract-p1.md)，酷狗阶段设备及构建证据见 [酷狗阶段验收](lyrics-translation-kugou-acceptance-20261022.md)，此前见 [网易云验收](lyrics-translation-acceptance-20261022.md)及 [QQ验收](lyrics-translation-qq-acceptance-20261022.md)，后续见 [翻译计划](lyrics-translation-plan.md)。

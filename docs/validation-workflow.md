@@ -30,6 +30,10 @@ pwsh -NoProfile -File scripts/verify.ps1
 
 [android-verify.yml](../.github/workflows/android-verify.yml) 在 main 推送、PR 和手动触发时使用相同入口，采用 Windows 2025、Microsoft JDK 17、SDK 36。第三方 Action 固定完整提交，权限为 `contents: read`，PR 缓存只读；不需要正式密钥。失败也上传报告，保留 14 天。
 
+GitHub Actions 是仓库中的自动任务执行服务：触发后由 GitHub 提供独立机器检出对应提交、准备工具、运行脚本并给出状态。它能发现本机缓存或环境掩盖的问题；通过构建和单元测试仍不能证明真实账号、听音或手机后台行为通过。
+
+查看仓库 Actions 页的 `Android verification`；需要重跑同一提交时使用运行详情中的 Re-run jobs，需要验证所选分支时使用 Run workflow。失败先看具体步骤与 `build.log`，再读取该次 Artifact 的 `summary.json`、源码清单及模块报告。报告保留期为 14 天，有效交付证据需另存项目 `.local/artifacts/` 并记录运行 URL、提交与 attempt。缓存仅用于加速，完整入口仍强制执行本轮 JVM 测试。
+
 文件提交推送后才会在 GitHub 执行。本机结果不能记作 Actions 已通过；首次远端执行还需检查 SDK 获取、runner 和报告上传。分支保护需要另在仓库设置中选择 `verify` 检查，不由 YAML 自动完成。
 
 ## 设备与发布

@@ -11,6 +11,7 @@
 - [可复用验证工作流](validation-workflow.md)：本地/CI 入口、报告与边界。
 - [发布签名与私钥](signing-security.md)：公开证书、私钥保管及升级约束。
 - [MeiloX 与 Glasmio 参考阅读](reference-review-20261103.md)：固定快照及可借鉴实现。
+- [PC 能力对齐与后续推进](pc-capability-roadmap.md)：静态背景首版建议、已有能力收尾与实机基线顺序；尚未开始实现。
 
 ## 现行接口合同
 

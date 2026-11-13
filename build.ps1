@@ -245,8 +245,12 @@ $buildLock = $null
 Push-Location $PSScriptRoot
 try {
     # File locks are released by the OS on process exit. Never expire a live build by its age.
-    $commonGitDirectory = & git rev-parse --path-format=absolute --git-common-dir 2>$null
-    $lockRoot = if ($LASTEXITCODE -eq 0) { Split-Path -Parent $commonGitDirectory } else { $PSScriptRoot }
+    # Relative Git paths avoid decoding the Chinese workspace name through a shell's
+    # native output encoding; different encodings previously produced different locks.
+    $commonGitDirectory = & git rev-parse --path-format=relative --git-common-dir 2>$null
+    $lockRoot = if ($LASTEXITCODE -eq 0) {
+        Split-Path -Parent ([IO.Path]::GetFullPath($commonGitDirectory, $PSScriptRoot))
+    } else { $PSScriptRoot }
     $lockDirectory = Join-Path $lockRoot '.local/tmp'
     New-Item -ItemType Directory -Path $lockDirectory -Force | Out-Null
     $lockPath = Join-Path $lockDirectory 'gradle-build.lock'

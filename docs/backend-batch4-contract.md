@@ -5,6 +5,9 @@
 本文描述本批新增合同。构建和真机结论以交付记录为准；接口存在不代表所有平台已完成在线验收。
 
 - `app.settings: StateFlow<AppSettings>`；命令在 `app.settingsRepository`。持久化主题 `SYSTEM/LIGHT/DARK`、透明、自动换源、放宽时长、默认音质、歌词字号 `SMALL/MEDIUM/LARGE`、配色 `COVER/FIXED`、译文 `AUTO/SHOW/HIDE`。使用 `setThemeMode`、`setTransparencyEnabled`、`setAutoSwitchSource`、`setRelaxSourceDuration`、`setDefaultQuality`、`setLyricsFontSize`、`setLyricsColorMode`、`setLyricsTranslationPreference`，或 `update { copy(...) }`。命令保存失败会抛异常，状态不先行变化；调用方应在 IO 线程执行并处理失败。`MainActivity` 已跟随主题，透明和歌词视觉由前端接线。
+- 2026-11-11 增加 `AppSettings.accent: String = "MIST"` 与 `app.settingsRepository.setAccent(value): AppSettings`，存储键为 `settings.accent`。setter 仅校验名称形状 `[A-Z0-9_]{1,32}`，不枚举可选颜色；非法值抛 `IllegalArgumentException` 且不保存、不发布。旧快照缺键回默认，未知名称原样读取/保存，由界面回退显示。同步 `SharedPreferences.commit()` 在调用方线程执行，调用方用 IO dispatcher，成功后才更新 `settings`；与壁纸、玻璃、封面取色独立。接口与验证范围见[本轮需求交付](backend-requests-20261111.md#交付说明codex-填写)。
+- 2026-11-11 增加 `AppSettings.mediaCardLyrics: Boolean = false` 与 `app.settingsRepository.setMediaCardLyrics(Boolean): AppSettings`，存储键 `settings.media-card-lyrics`，旧数据缺键／畸形值默认关。同步保存与失败语义同上述设置。只影响平台会话标题，应用内歌名不变；原歌名放媒体副标题，蓝牙／车机可能显示歌词为歌名。无需 ColorOS 厂商门禁，前端由 CC 接开关；完整语义与未验收范围见[媒体卡片歌词](backend-media-card-lyrics-20261111.md)。
+- 2026-11-12 增加 `AppSettings.recommendationsEnabled: Boolean = true` 与 `app.settingsRepository.setRecommendationsEnabled(Boolean): AppSettings`，存储键 `settings.recommendations-enabled`，旧数据缺键／非法值默认开。专用 setter 和通用 update 都在保存成功后同步通知推荐后端，关闭会立即失效三平台工作/内存，并在串行缓存队列清推荐列表文件；重新开启不自动请求，保留30秒限流。已接受播放队列和共享封面保留，关闭时 `play` 失败码为 `recommendations_disabled`。完整接口与磁盘完成时刻见[推荐合同](frontend-backend-contract-recommendations.md#应用级总开关)。
 - 默认音质使用 `core.playback.PreferredAudioQuality` 的 `STANDARD/HIGH/LOSSLESS/BEST`；旧 `AccountRepository.DefaultAudioQuality` 命令兼容并写到同一设置。旧 `playback-preferences-v1/quality.default` 可读，第一次修改任意设置后写入新快照。既有逐平台显式音质仍优先于全局默认，可用 `clearPreferredQuality(platform)` 清除。
 - 自动换源默认开、放宽时长默认关。关闭自动换源后仍搜索，但状态停在 `CHOOSING` 等待选择。手动模式也不会自动选。标题和完整歌手集合一致且没有版本标记是必要条件。严格时长差同时不超过 3 秒与较短版本的 2%；放宽时同时不超过 15 秒与 8%。返回候选按允许自动匹配、时长差、同专辑排序。平台搜索保留固定超时与短暂并行等待，`partial` 表示并非所有平台都已返回。
 - `SourceCandidate.relaxedMatch / durationDifferenceMs` 为候选标记；`SourceSelectionState.selectedPlatform / selectedRelaxedMatch` 表示选择，`playbackConfirmed` 为服务实际进入播放后的确认，成功提示应等待这个确认。候选选择仍使用 revision，不能凭旧索引调用。
@@ -22,6 +25,8 @@
 会员在登录验证后刷新，返回前台时也刷新；自动刷新按平台和账号代次节流 60 秒，并合并正在进行的请求。`accounts.refreshMembership(platform)` 可显式刷新，不受该时间节流限制，仍合并在途请求；请求失败将状态标为 UNKNOWN，登录保持有效。酷狗音质菜单现在还按会员状态隔离缓存，NO/YES/UNKNOWN 变化后不沿用上一状态的 60 秒结果。
 
 ## 缓存维护（追加）
+
+歌单内缓存搜索的主动补全使用三平台 `LibraryBrowser.fillPlaylist(key)` / `fillState` / `cancelFill()`，接口、5000 上限、账号/取消、共享限速/退避和错误语义见[11-11 歌单缓存补全交付](backend-requests-20261111-3.md#交付说明)。搜索结果播放仍需原始 offset 0 连续前缀，搜索的去重/跨空洞结果不能直接当作队列前缀。
 
 入口为 `app.cache`：`state: StateFlow<CacheMaintenanceState>`，`refresh { CacheOperationResult }` 查询占用，`clear { CacheOperationResult }` 清理三个类别后重新统计。两命令异步串行执行，回调在主线程，文件操作在后台；页面用 `state.busy / clearing` 控制进度与按钮。
 

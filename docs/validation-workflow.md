@@ -40,4 +40,16 @@ GitHub Actions 是仓库中的自动任务执行服务：触发后由 GitHub 提
 
 真实账号、网络取流、焦点、长后台、来电和回收需要专项实机验收。记录包哈希、设备/系统、账号权益、步骤、实际声音和收尾状态，不恢复历史队列、不借旧授权改账号或收藏。
 
+设备复用步骤、明确选择测试类、真实写入参数与本轮恢复证据见 [v0.2 后端集中实机验收](backend-v02-device-acceptance-20261103.md)。新增收藏测试默认跳过，只有已获当轮授权并传 `allowPlatformWrites=true` 才执行；手动换源测试须传 `allowManualSourceSwitch=true`。先解锁并保持前台，后台/锁屏单独安排；报告必须核对本轮时间，广播成功不等于测试通过。不要直接执行包含历史故障注入与更新测试的整个设备套件。
+
+2026-11-06 新增 `PlaylistMembershipDeviceTest`，必须显式选择该类并传 `allowPlatformWrites=true`；它不在统一入口中自动执行。写前保存当轮普通歌单与红心基线，完成后核对完整顺序；中断时只删除本轮新加的测试歌，不恢复历史队列或重建账号。首轮无 ADB 设备时的交付边界保留于 [首轮记录](backend-playlist-delivery-20261106.md)。
+
+同日后续手机重连后已执行该专项，酷狗空普通歌单往返通过、网易云跳过、QQ 写前连接超时，见 [后续接入与实机证据](backend-playlist-followup-20261106.md)。这里的结果独立于冻结构建摘要，后者 `deviceTestsExecuted=false` 不改写；不能因 instrumentation 汇总为 3 项就忽略平台跳过或失败。
+
+用户完成 QQ 登录与网易云歌单准备后，新增改名、整单订阅、QQ 两歌单联合管理及创建一次性 marker 专项，步骤、额外开关、真实通过/风控/不确定状态见 [追加验收](backend-playlist-device-20261106.md)。创建 marker 的只读检查返回测试成功，业务仍可能为 `UNKNOWN`；必须同时读取当轮安全报告，不能只看 runner 汇总。
+
 正式发布另用 [Release 构建](release-build.md) 与 [签名说明](signing-security.md)，沿用原正式密钥；持续集成不自动签正式包、推送、合并或发布。
+
+2026-11-10 本地音频设备专项必须明确选择 `LocalAudioDeviceTest`、`allowLocalAudioDevice=true` 和 `localPhase`，使用当轮生成文件与 marker 协调源删除、重启、撤权和清理；不得套用户真实文件或直接重放旧 marker。独立 `LocalAudioStorageDeviceTest` 与 `WallpaperDeviceTest` 只用自建临时存储。真实标准 SAF、解码、暂停恢复、定时、权限与限制见[当轮设备记录](backend-local-device-20261110.md)。内部 `LocalAudioPickerValidationActivity` 只在 debug Manifest 注册且不导出，系统原始选择结果留在内存，不进入公开状态或报告。
+
+同日重连后的扩展格式与 OEM／通知补验明确选择 `LocalAudioFollowupDeviceTest`、`allowLocalAudioFollowup=true` 和单个 `localPhase`。连续熄屏观察用普通 debug 进程的固定广播，不在 instrumentation 内声称后台存活；核对音频身份、屏幕事件、连续时长、真实定时停止窗口与落盘进度，并另记充电/device-idle 状态。阶段结果、失败尝试、abort 与清理见[追加设备记录](backend-local-followup-device-20261110.md)。

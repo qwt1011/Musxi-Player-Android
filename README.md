@@ -47,9 +47,9 @@ Musxi Player 的原生安卓版本，基于 [Miloscovo/Musxi-Player](https://git
 
 ## 下载与安装
 
-当前已公开版本为 [Android v0.2](https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.2)。**v0.3候选（0.3.0／versionCode 6）已完成本地构建与验证，因GitHub写入权限待恢复，尚未上线**；源码功能概览描述该候选范围。支持 Android 8.0 / API 26 及以上。
+当前正式版本为 [Android v0.3](https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.3.0)，应用版本 **0.3.0／versionCode 6**。支持 Android 8.0 / API 26 及以上。
 
-正式发布后可在 [GitHub Releases](https://github.com/qwt1011/Musxi-Player-Android/releases/latest) 下载 `Musxi-Player-0.3.0.apk`，并取得 `SHA256SUMS.txt` 和应用内更新清单。沿用 v0.2 的正式包名 `tech.musxi.player` 与长期签名，可覆盖更新并保留应用数据。
+在 [GitHub Releases](https://github.com/qwt1011/Musxi-Player-Android/releases/latest) 下载 `Musxi-Player-0.3.0.apk`，并取得 `SHA256SUMS.txt` 和应用内更新清单。沿用 v0.2 的正式包名 `tech.musxi.player` 与长期签名，可覆盖更新并保留应用数据。
 
 开发包 `tech.musxi.player.dev` 与正式包可并存，账号、设置及队列独立保存，不能用正式包自动迁移开发包数据。具体变化及验证边界见 [v0.3 发布说明](docs/android-v0.3-release.md)。
 

@@ -2,8 +2,6 @@
 
 Android v0.3，应用版本 **0.3.0**，versionCode **6**。这一版把 v0.2 之后的本地音频、歌词、个性化与交互进展汇入同一个正式安装包，并继续完善播放与平台后台能力。
 
-准备状态：本地提交和签名安装包已完成；2026-11-13推送及Git Data API写入均因现有GitHub令牌权限返回403，远端仍为v0.2。以下为待发布的完整说明，下载及标签链接将在权限恢复并发布后生效；未创建上游新PR，未宣称已经上线。
-
 安装包与对应源码发布在 [独立安卓仓库 v0.3](https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.3.0)，安卓源码另向 [PC 上游 android/development](https://github.com/Miloscovo/Musxi-Player/tree/android/development) 提交，不改变 PC 主线。Release 标签使用 `v0.3.0`，与应用内更新清单的 `0.3.0` 精确匹配。
 
 ## 下载与升级

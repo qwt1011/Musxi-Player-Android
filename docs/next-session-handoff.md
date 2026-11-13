@@ -4,7 +4,7 @@
 
 ## 用户安排与工作范围
 
-- v0.3当前发布状态：本地源码提交、签名APK和更新文案已准备，**远端发布尚未完成**。安卓候选提交35f5850已落盘，PC候选分支android/v0.3与安卓源码树一致；Git通过本机代理连通后推送返回403，GitHub Git Data API对两个自有仓库也返回 `Resource not accessible by personal access token`，响应明确要求contents=write。当前gh与环境为同一令牌，需要用户在本机补足仓库权限后接续；不要在聊天打印令牌。线上main仍70778e9、最新Release仍v0.2，新PR尚未创建。准备材料和恢复步骤见项目 `.local/artifacts/release-v0.3-preparation/README.md`。
+- v0.3发布入口：[正式Release与安装包](https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.3.0)、[对应源码](https://github.com/qwt1011/Musxi-Player-Android/tree/v0.3.0)、[完整更新说明](android-v0.3-release.md)。PC上游PR使用fork分支`qwt1011:android/v0.3`，基于`android/development`的PR #28合并点c8b1ab3，保持与本次安卓源码树一致；不合并PC main。用户已在本机更新GitHub登录授权，先前403属于历史失败，实际提交、PR、Release与校验结果保留在项目 `.local/artifacts/release-v0.3-preparation/`，不打印令牌。
 
 - 当前任务为Android v0.3发布：用户明确授权核对安卓独立仓库及PC上游基线、提交全部现有开发、向上游android/development提交新PR，并在安卓仓库发布正式签名APK与更新说明；不合并PC主线。版本升为0.3.0／code6，沿用v0.2密钥。README参考LoveACE结构，使用自有图标与合成页面样张。前述历史“不提交／不推送”仅约束对应旧轮，不撤销本轮明确授权；真实账号／平台写入仍不在发布操作范围。
 

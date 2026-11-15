@@ -39,11 +39,30 @@ Musxi Player 的原生安卓版本，基于 [Miloscovo/Musxi-Player](https://git
 
 ## 界面预览
 
+**个性化实机效果**
+
+| 播放页壁纸 | 双语歌词 | 透明玻璃队列 |
+| :---: | :---: | :---: |
+| <img src="docs/media/readme/personalized-player.png" width="220" alt="深色模式与自定义壁纸下，SAKURA 的真实播放页"> | <img src="docs/media/readme/personalized-lyrics.png" width="220" alt="自定义壁纸上的日文歌词、中文译文与封面取色高亮"> | <img src="docs/media/readme/personalized-queue.png" width="220" alt="透出播放页壁纸与歌词的玻璃播放队列"> |
+
+使用开发者手机上已保存的个性化设置，在实际应用窗口中截取。示例歌曲为 **《SAKURA》— いきものがかり**，封面、歌词与译文来自当前歌曲；队列中也为真实歌曲。截图排除了系统状态栏、导航栏和其他应用的悬浮小窗，未拼接或重绘界面。
+
+| 设置 | 本组截图使用的值 |
+| --- | --- |
+| 外观 | 深色模式；松石青（TEAL）；透明效果开启 |
+| 播放页壁纸 | 开启；强度 **150 / 150**；缩放 **1.0×**；取景中心 **(0.5452, 0.5000)** |
+| 界面壁纸 | 开启；强度 **150 / 150**；缩放 **1.0×**；取景中心 **(0.4521, 0.5000)** |
+| 歌词 | 大字号；颜色跟随封面；译文自动判断（本曲显示中文译文） |
+
+取景中心使用图片宽高归一化坐标，左上为 `(0, 0)`、右下为 `(1, 1)`；壁纸强度是应用的可见程度参数，并非透明度百分比。界面壁纸作用于曲库等页面，本组三张截图展示播放页壁纸。截图设备为 Android 16，使用 0.3.0 开发包；玻璃效果会按系统能力回退。详细参数与素材来源见 [预览来源](docs/media/readme/README.md)。
+
+**布局预览（合成数据）**
+
 | 播放页 | 歌词页 | 本地音频 |
 | :---: | :---: | :---: |
 | <img src="docs/media/readme/player.png" width="220" alt="自定义背景的 Musxi 播放页"> | <img src="docs/media/readme/lyrics.png" width="220" alt="Musxi 歌词与播放控制"> | <img src="docs/media/readme/local-audio.png" width="220" alt="本地音频文件夹和继续播放"> |
 
-以上由实际 Compose 页面使用合成数据生成，展示布局和外观，不含真实账号资料，也不替代实机验收。素材说明见 [预览来源](docs/media/readme/README.md)。
+本行三张由实际 Compose 页面使用合成数据生成，展示布局和外观，不含真实账号资料，也不替代实机验收。素材说明见 [预览来源](docs/media/readme/README.md)。
 
 ## 下载与安装
 

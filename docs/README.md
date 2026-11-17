@@ -1,8 +1,32 @@
 # Musxi Android 文档导航
 
-更新：2026-11-13。按“当前任务 → 能力状态 → 专门合同 → 当次证据”阅读。入口职责固定；日期记录中的当前状态、测试数和设备结果都属于当次范围。
+更新：2026-11-17。按“当前任务 → 能力状态 → 专门合同 → 当次证据”阅读。入口职责固定；日期记录中的当前状态、测试数和设备结果都属于当次范围。
 
 ## 先读这些
+
+[后端下一步建议](backend-next-priorities-20261117.md)：用户安排近期以后端为主、前端暂缓；优先版本与分页稳定性、目录与任务生命周期、后台可靠性，再选择 A／B 或本地 LRC。新建歌单浮卡仅记录风格待办。
+
+[曲库主页最近播放稳定性修复](backend-library-home-stability-20261117.md)：修复同账号重开目录时先发布空态引发上方模块消失；三平台重开刷新、产品推荐／喜欢页进出与下拉回弹后位置验证，QQ 最近播放卡片缺样本。
+
+[歌单长按反馈与酷狗操作权限查询修复](backend-playlist-menu-permissions-20261117.md)：去掉网格整块按压蒙层、沿用统一长按触感；实机确认稳定版本 null 终页和普通行省略 is_def 两个兼容点，补严格终页及本人创建者验证。重连同包权限、大小网格长按、三平台目录详情及刷新回归通过，未真实改名删除。
+
+[酷狗下拉刷新与自动分页循环修复](backend-playlist-refresh-20261117.md)：首页刷新清尾页后，近期成功记录误阻止缺缓存页请求；补齐完整目录立即刷新及真实页面自动续页回归。
+
+[歌单前端接入审查与回归修复](frontend-playlist-review-20261117.md)：主目录整合当前 DSF 与隔离前端，修复旧库版本安装、酷狗分页、详情订阅、弹窗及列表问题；真实平台写入不在本轮。
+
+[DSF正常生产启用验收](backend-dsf-enablement-20261117.md)：正式源码已启用，64／128复制／引用和新进程四条来源控制／曲末通过；release编译／Lint／清单隔离及签名门禁通过，签名APK和正式包实机尚待。前端及第五六批暂缓。
+
+[DSD64断电半小时观察](backend-dsf-battery-device-20261116.md)通过：22:33:06～23:03:12，断电播放30分5秒、120次全部熄屏锁定／放电采样、8次回绕、0缓冲跃迁，电量79%→77%，charge counter报告减少52mAh，温度24.5→21.6°C、thermal始终0。单次整机数据，不能外推其他倍率／续航；数据保全完成。云端按需；该记录属于11-16观察，正常启用以11-17专项为准。
+
+[实际系统提供方验收](backend-dsf-actual-provider-device-20261116.md)已通过内部存储／下载两个不同authority：实际随机定位、引用持久授权／重开隔离仓库解析、COPY整文件匹配与跨来源relink保留ID／名称／进度／书签。当前已装云盘未发现标准provider，云端仍待；原库不变。
+
+[受控Android管道实机](backend-dsf-pipe-provider-device-20261116.md)已完整通过：真实ESPIPE、REFERENCE返回COPY_REQUIRED且无授权残留；已知／未知大小COPY整文件与尾标签匹配，8,192字节在途取消及未知大小截断拒绝均无残留。使用隔离库，原数据不变；实际网盘／耗电仍待。
+
+[DSF切换与一小时持续播放](backend-dsf-switch-soak-20261116.md)：DSF／普通FLAC／酷狗切换与进度恢复，DSD64连续60分4秒／14次循环／0缓冲跃迁；USB下热与内存、完整数据保全及剩余边界。
+
+[统一外部音频测试材料](audio-test-materials-20261116.md)：用户指定独立目录、真实DSD64／128及高采样FLAC、截断样本与本地探测范围；[真实音乐DSD64／128与在途复制取消实机](backend-dsf-real-music-device-20261116.md)。
+
+新增：[本地音频与扩展音源六批计划](audio-expansion-roadmap-20261114.md)、[CUE第一批接口与交付](backend-cue-preview-20261114.md)、[CUE第二批入库与播放](backend-cue-import-playback-20261114.md)、[第三批格式与输出信息](backend-audio-format-info-20261114.md)、[第四批DSF准备](backend-dsf-preparation-20261114.md)、[首次实机与性能评估](backend-audio-expansion-device-20261114.md)、[DSF应用内优化及持续播放复验](backend-dsf-optimization-20261114.md)、[后台受限定位与整首熄屏验收](backend-dsf-background-20261115.md)、[有界听音窗口与音频焦点观察](backend-dsf-listening-20261115.md)、[蓝牙听感确认与64／128工程样本](backend-dsf-multirate-samples-20261115.md)、[64／128短样实机与暂停读回诊断](backend-dsf-multirate-device-20261115.md)、[DSF正式导入与来源收尾](backend-dsf-production-prep-20261115.md)、[DSF正式导入新包实机](backend-dsf-production-device-20261115.md)（生产开关关闭，更多提供方与长时仍待）。
 
 | 要解决什么 | 文档 |
 | --- | --- |

@@ -6,6 +6,7 @@ data class LocalAudioSourceCheckResult(
     val availability: LocalAudioAvailability? = null,
     val error: LocalAudioError? = null,
     val applied: Boolean = false,
+    val recoveryAction: LocalAudioRecoveryAction? = null,
 )
 
 data class LocalAudioSourceCheckState(

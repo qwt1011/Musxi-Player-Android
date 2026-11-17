@@ -72,7 +72,7 @@ Musxi Player 的原生安卓版本，基于 [Miloscovo/Musxi-Player](https://git
 
 开发包 `tech.musxi.player.dev` 与正式包可并存，账号、设置及队列独立保存，不能用正式包自动迁移开发包数据。具体变化及验证边界见 [v0.3 发布说明](docs/android-v0.3-release.md)。
 
-当前仍在完善：其他 Android 版本、长时间后台、来电、不同文件提供方与更多音频设备需要继续验证。发布说明描述本版范围，源码和专项进展另见 [能力状态](docs/feature-status.md)。
+当前开发源码已启用本地 DSF 的 DSD64／128／256 到 PCM 播放，补齐正常启动、复制／引用与重启实机验收，见 [启用记录](docs/backend-dsf-enablement-20261117.md)。GitHub v0.3 安装包不包含本轮改动；本轮尚未生成新的正式签名包。其他 Android 版本、数小时后台／深度休眠、来电与更多音频设备继续按需验证；完整状态见 [能力状态](docs/feature-status.md)。
 
 ## 构建与开发
 

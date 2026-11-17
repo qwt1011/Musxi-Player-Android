@@ -51,7 +51,8 @@ enum class LocalAudioError {
     PERMISSION_REQUIRED, UNSUPPORTED_AUDIO, TOO_LARGE, NOT_ENOUGH_SPACE, SOURCE_CHANGED,
     INVALID_BACKUP, UNSUPPORTED_BACKUP, STALE_STATE, INVALID_TARGET,
 }
-class LocalAudioFailure(val error: LocalAudioError) : IOException("Local audio: ${error.name}")
+enum class LocalAudioRecoveryAction { COPY_REQUIRED }
+class LocalAudioFailure(val error: LocalAudioError, val recoveryAction: LocalAudioRecoveryAction? = null) : IOException("Local audio: ${error.name}")
 
 data class LocalAudioMetadata(
     val fileName: String,
@@ -86,6 +87,8 @@ data class LocalAudioItem(
     val playbackSpeed: Float = 1f,
     /** The user's own cover; [metadata] only ever holds the automatically extracted one. */
     val customArtworkKey: String? = null,
+    /** Optional immutable slice of one shared source; progress and bookmarks are slice-relative. */
+    val segment: LocalAudioSegment? = null,
 ) {
     init {
         LocalAudioLimits.requireId(id)
@@ -153,7 +156,8 @@ data class LocalAudioLibraryState(
     val directories: List<LocalAudioDirectoryLink> = emptyList(),
 )
 
-data class LocalAudioImportResult(val fileName: String, val audioId: String? = null, val error: LocalAudioError? = null)
+data class LocalAudioImportResult(val fileName: String, val audioId: String? = null, val error: LocalAudioError? = null,
+    val recoveryAction: LocalAudioRecoveryAction? = null)
 data class LocalAudioImportState(
     val running: Boolean = false,
     val total: Int = 0,
@@ -176,6 +180,9 @@ interface LocalAudioStore : AutoCloseable {
     /** Deduplicate by (mode, source.identity); preserve user names/progress/bookmarks. */
     fun importAudio(folderId: String, metadata: LocalAudioMetadata, source: LocalAudioSource,
         directory: LocalAudioDirectoryImport? = null): LocalAudioItem
+    /** All slices and memberships commit together, or none do. Never creates an implicit whole-file item. */
+    fun importCue(folderId: String, tracks: List<LocalCueImportTrack>, expectedRevision: Long,
+        checkCancelled: () -> Unit = {}): List<LocalAudioItem> = throw LocalAudioFailure(LocalAudioError.UNSUPPORTED_AUDIO)
     fun source(audioId: String): StoredLocalAudio?
     fun renameAudio(audioId: String, name: String?)
     fun addToFolder(folderId: String, audioId: String)

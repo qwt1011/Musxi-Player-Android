@@ -25,14 +25,28 @@ internal class LocalAudioDocument(
 internal interface LocalAudioDocuments {
     fun describe(uri: Uri): LocalAudioDocument
     fun metadata(document: LocalAudioDocument): LocalAudioMetadata
+    /** Import context allows DSF references to require random access while COPY can read a pipe. */
+    fun metadataForImport(document: LocalAudioDocument, mode: LocalImportMode, checkCancelled: () -> Unit): LocalAudioMetadata {
+        checkCancelled()
+        return metadata(document).also { checkCancelled() }
+    }
+    val dsfPlaybackEnabled: Boolean get() = false
     fun open(uri: Uri): InputStream
+    /** Bounded explicit inspection. No sequential fallback across the audio payload. */
+    fun readRange(uri: Uri, offset: Long, count: Int, checkCancelled: () -> Unit): ByteArray? {
+        require(offset >= 0 && count in 1..DsfId3Tags.MAX_TAG_BYTES)
+        if (offset != 0L) return null
+        return open(uri).use { readDsfRange(it, count, checkCancelled) }
+    }
     fun acquireRead(grant: Uri, flags: Int)
     fun releaseUnused(retained: Set<String>)
     fun children(tree: Uri, recursive: Boolean, checkCancelled: () -> Unit = {}): List<LocalAudioDocument>
 }
 
 /** SAF and platform metadata APIs only; no storage permission or third-party tag parser. */
-internal class AndroidLocalAudioDocuments(context: Context) : LocalAudioDocuments {
+internal class AndroidLocalAudioDocuments(context: Context,
+    private val dsfEnabled: () -> Boolean = { (context.applicationContext as? tech.musxi.playback.PlaybackHost)?.dsfPlaybackEnabled == true },
+) : LocalAudioDocuments {
     private val app = context.applicationContext
     private val resolver = app.contentResolver
     private val grants = app.getSharedPreferences("local-audio-grants-v1", Context.MODE_PRIVATE)
@@ -59,8 +73,21 @@ internal class AndroidLocalAudioDocuments(context: Context) : LocalAudioDocument
         }
     }
 
+    override val dsfPlaybackEnabled: Boolean get() = dsfEnabled()
+
+    override fun metadataForImport(document: LocalAudioDocument, mode: LocalImportMode, checkCancelled: () -> Unit): LocalAudioMetadata {
+        if (!DsfPlaybackSupport.isCandidate(document.name, document.mime)) return super.metadataForImport(document, mode, checkCancelled)
+        return dsfMetadata(document, mode, checkCancelled)
+    }
+
+    private fun dsfMetadata(document: LocalAudioDocument, mode: LocalImportMode, checkCancelled: () -> Unit): LocalAudioMetadata = readable {
+        dsfImportMetadata(this, document, mode, checkCancelled)
+    }
+
     override fun metadata(document: LocalAudioDocument): LocalAudioMetadata = readable {
         val extension = document.name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)
+        if (DsfPlaybackSupport.isCandidate(document.name, document.mime))
+            return@readable dsfMetadata(document, LocalImportMode.REFERENCE) {}
         val videoMime = document.mime?.startsWith("video/") == true
         val videoExtension = extension in VIDEO_EXTENSIONS
         val audioMime = document.mime?.startsWith("audio/") == true
@@ -103,6 +130,20 @@ internal class AndroidLocalAudioDocuments(context: Context) : LocalAudioDocument
     override fun open(uri: Uri): InputStream = readable {
         requireContent(uri)
         resolver.openInputStream(uri) ?: throw LocalAudioFailure(LocalAudioError.READ_FAILED)
+    }
+
+    override fun readRange(uri: Uri, offset: Long, count: Int, checkCancelled: () -> Unit): ByteArray? = readable {
+        requireContent(uri)
+        require(offset >= 0 && count in 1..DsfId3Tags.MAX_TAG_BYTES)
+        checkCancelled()
+        if (offset == 0L) return@readable open(uri).use { readDsfRange(it, count, checkCancelled) }
+        // SAF pipes need not seek. Never replace a failed seek with a multi-gigabyte skip.
+        resolver.openFileDescriptor(uri, "r")?.let { descriptor ->
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+                try { input.channel.position(offset) } catch (_: java.io.IOException) { return@readable null }
+                readDsfRange(input, count, checkCancelled)
+            }
+        }
     }
 
     override fun acquireRead(grant: Uri, flags: Int) {
@@ -165,7 +206,8 @@ internal class AndroidLocalAudioDocuments(context: Context) : LocalAudioDocument
                     if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
                         if (recursive) pending.add(id)
                     } else if (mime?.startsWith("audio/") == true || mime?.startsWith("video/") == true ||
-                        name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT) in MEDIA_EXTENSIONS) {
+                        name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT) in MEDIA_EXTENSIONS ||
+                        (dsfPlaybackEnabled && DsfPlaybackSupport.isCandidate(name, mime))) {
                         result += LocalAudioDocument(DocumentsContract.buildDocumentUriUsingTree(tree, id), name, mime,
                             if (cursor.isNull(3)) null else cursor.getLong(3).takeIf { it >= 0 },
                             modifiedAtMs = if (modifiedIndex >= 0 && !cursor.isNull(modifiedIndex))

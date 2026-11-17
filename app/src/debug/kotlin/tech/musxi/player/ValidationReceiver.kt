@@ -31,6 +31,11 @@ class ValidationReceiver : BroadcastReceiver() {
         if (tech.musxi.playback.LockScreenLyricsProbeValidation.run(app, step)) return
         if (LockScreenPageProbeValidation.run(app, step)) return
         if (LocalAudioBackgroundValidationRunner.run(app, step)) return
+        if (DsfDeviceValidationRunner.accepts(step)) {
+            val pending = goAsync()
+            DsfDeviceValidationRunner.run(app, step) { pending.finish() }
+            return
+        }
         if (BackendLiveValidationRunner.run(app, step)) return
         if (BackendToolsAcceptanceRunner.run(app, step) || OutputAcceptanceValidationRunner.run(app, step)) return
         if (PlaybackToolsValidationRunner.run(app, step) || OutputTraceValidationRunner.run(app, step)) return

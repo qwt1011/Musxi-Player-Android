@@ -44,8 +44,13 @@ public final class KugouLibraryApi {
     }
     public static final class Page<T> {
         public final List<T> items; public final int nextOffset, total;
+        private final Long accountVersion;
         Page(List<T> items, int nextOffset, int total) {
+            this(items,nextOffset,total,null);
+        }
+        private Page(List<T> items, int nextOffset, int total, Long accountVersion) {
             this.items = Collections.unmodifiableList(new ArrayList<>(items)); this.nextOffset = nextOffset; this.total = total;
+            this.accountVersion=accountVersion;
         }
     }
     public static final class Playlist {
@@ -81,7 +86,7 @@ public final class KugouLibraryApi {
          * not enough. Read-only: it never changes what renamePlaylist actually revalidates.
          */
         public boolean canRename() { return editable && !favorite && !systemDefault && editMetadata!=null; }
-        /** Explicit is_edit=1 / is_def=0 is required; missing or future system flags fail closed. */
+        /** Editable ordinary account row; omitted system flags require authenticated creator proof. */
         public boolean canDelete() { return ordinaryOwned && editable && !favorite && !systemDefault && kind==Kind.CREATED; }
     }
     public static class Song {
@@ -286,16 +291,26 @@ public final class KugouLibraryApi {
         return playlists(session,offset,limit,false);
     }
     private Page<Playlist> playlists(KugouApi.Session session,int offset,int limit,boolean strict) throws IOException {
+        return playlists(session,offset,limit,strict,null);
+    }
+    private Page<Playlist> playlists(KugouApi.Session session,int offset,int limit,boolean strict,
+        Long shortPageVersion) throws IOException {
         bounds(offset,limit);
         String body = "{\"userid\":"+JSONObject.quote(session.userId)+",\"token\":"+JSONObject.quote(session.token)+
             ",\"total_ver\":979,\"type\":2,\"page\":"+(offset/limit+1)+",\"pagesize\":"+limit+"}";
         JSONObject root=api.libraryCall("/v7/get_all_list",session,map("plat","1"),body,false);
         if(strict) {
             JSONObject data=success(root);
+            // The live API also ends an unknown-total account list with info:null. Accept
+            // only after a nonempty short page and with a stable version for the entire walk.
+            boolean confirmedNullEnd=offset>0 && shortPageVersion!=null && !data.has("total") && !data.has("count") &&
+                data.has("info") && data.isNull("info") && !data.has("lists") &&
+                shortPageVersion.equals(accountVersion(data));
+            if(data.has("info") && data.isNull("info") && data.has("lists"))throw error("incomplete");
             if(!(data.opt("info") instanceof JSONArray) && !(data.opt("lists") instanceof JSONArray) &&
-                !(offset==0 && total(data)==0))throw error("incomplete");
+                !(offset==0 && total(data)==0) && !confirmedNullEnd)throw error("incomplete");
         }
-        return parsePlaylists(root,offset,limit);
+        return parsePlaylists(root,offset,limit,session.userId);
     }
     public Page<Track> tracks(KugouApi.Session session,String playlistId,int offset,int limit) throws IOException {
         return tracks(session,playlistId,null,offset,limit);
@@ -544,10 +559,14 @@ public final class KugouLibraryApi {
         numeric(playlistId,false);
         long deadline=System.nanoTime()+60_000_000_000L;
         Playlist target=null; Integer expected=null; int offset=0; Set<String> lists=new HashSet<>();
+        Long version=null; boolean stableVersion=true,previousShort=false;
         while(true) {
             favoriteCurrent(current,deadline);
-            Page<Playlist> page=playlists(session,offset,100,true);
+            Page<Playlist> page=playlists(session,offset,100,true,
+                stableVersion && previousShort ? version : null);
             favoriteCurrent(current,deadline);
+            if(page.accountVersion==null || (version!=null && !version.equals(page.accountVersion)))stableVersion=false;
+            if(offset==0)version=page.accountVersion;
             if(page.total>=0) {
                 if(page.total>20_000 || (expected!=null && expected!=page.total))throw error("incomplete");
                 expected=page.total;
@@ -558,6 +577,7 @@ public final class KugouLibraryApi {
             }
             if(page.nextOffset<0)break;
             if(page.items.isEmpty() || page.nextOffset!=offset+100 || page.nextOffset>20_000)throw error("incomplete");
+            previousShort=page.items.size()<100;
             offset=page.nextOffset;
         }
         if(expected!=null && expected!=lists.size())throw error("incomplete");
@@ -1095,6 +1115,9 @@ public final class KugouLibraryApi {
             : selectAudio(audio,audioProbe);
     }
     static Page<Playlist> parsePlaylists(JSONObject root,int offset,int limit) throws IOException {
+        return parsePlaylists(root,offset,limit,null);
+    }
+    private static Page<Playlist> parsePlaylists(JSONObject root,int offset,int limit,String accountOwner) throws IOException {
         JSONObject data=success(root);
         // A null page with no explicit zero count is not proof of an empty account library.
         if(offset==0 && !(data.opt("info") instanceof JSONArray) &&
@@ -1116,9 +1139,22 @@ public final class KugouLibraryApi {
             String sourceGlobalId=!editable && !"2".equals(text(row.opt("is_def"))) && present(row,"list_create_gid")
                 ? identifier(row.opt("list_create_gid")) : null;
             out.add(new Playlist(id,clean(row.opt("name"),"未命名歌单"),cover(row),tracks,favorite,editable,sourceGlobalId,editMetadata(data,row),
-                "1".equals(text(row.opt("is_def"))),editable && "0".equals(text(row.opt("is_def")))));
+                "1".equals(text(row.opt("is_def"))),editable && ordinaryAccountList(row,accountOwner)));
         }
-        int total=total(data); return new Page<>(out,next(offset,rows.length(),total,limit),total);
+        int total=total(data); return new Page<>(out,next(offset,rows.length(),total,limit),total,accountVersion(data));
+    }
+    private static boolean ordinaryAccountList(JSONObject row,String accountOwner) {
+        if(row.has("is_def"))return "0".equals(text(row.opt("is_def")));
+        // Live ordinary lists omit is_def. A missing flag needs independent proof of
+        // ownership; explicit null/unknown flags must never enter this compatibility path.
+        if(accountOwner==null)return false;
+        try {
+            return numeric(accountOwner,false).equals(numeric(row.opt("list_create_userid"),false));
+        } catch(IOException invalidOwner) { return false; }
+    }
+    private static Long accountVersion(JSONObject data) {
+        try { return nonnegative(data.opt("total_ver"),9_007_199_254_740_991L); }
+        catch(IOException invalid) { return null; }
     }
     static Page<Track> parseTracks(JSONObject root,int offset,int limit) throws IOException {
         JSONObject data=success(root); JSONArray rows=rows(data,"info","songs","lists");

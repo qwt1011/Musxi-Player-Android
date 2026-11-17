@@ -120,6 +120,8 @@ class PlaybackConnection(context: Context) {
     val queueState = queueSnapshot.asStateFlow()
     val localQueueState = localQueueSnapshot.asStateFlow()
     val outputs = outputSnapshot.asStateFlow()
+    /** Service observations; no signed URLs or file capabilities. Unknown boundaries stay null. */
+    val audioInfo = audioInfoSnapshot.asStateFlow()
     /** Service-owned monotonic timer, available even while the player page is closed. */
     val sleepTimer = sleepTimerSnapshot.asStateFlow()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)

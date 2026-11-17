@@ -110,6 +110,50 @@ class LibraryBrowserTest {
         assertEquals(1, f.playlistCalls.size)
     }
 
+    @Test fun recentPlaylistSuccessCannotSuppressFetchAfterCacheEviction() {
+        for (platform in listOf(Platform.NETEASE, Platform.QQ, Platform.KUGOU)) {
+            val f = Fixture(platform)
+            val page = Page(listOf(PlaylistSummary(MediaKey(platform, "9"), "Fresh", null, 1)), null, 1)
+            f.browser.playlists(); f.flush()
+            f.playlistCalls.single()(Result.success(page)); f.flush()
+            f.store.playlists = null
+            f.browser.playlists(); f.flush()
+            assertEquals("$platform missing cache must refetch inside the success window", 2, f.playlistCalls.size)
+            assertTrue(f.browser.state.value.refreshing)
+            f.playlistCalls.last()(Result.success(page)); f.flush()
+            assertFalse(f.browser.state.value.refreshing)
+            f.browser.playlists(); f.flush()
+            assertEquals("$platform existing cache still avoids duplicate requests", 2, f.playlistCalls.size)
+        }
+    }
+
+    @Test fun recentTrackSuccessCannotSuppressFetchAfterCacheEviction() {
+        val f = Fixture()
+        val page = Page(listOf(SongSummary(MediaKey(Platform.NETEASE, "1"), "Song", emptyList(), "", 1000)), null, 1)
+        f.browser.tracks(playlist); f.flush()
+        f.trackCalls.single()(Result.success(page)); f.flush()
+        f.store.tracks = null
+        f.browser.tracks(playlist); f.flush()
+        assertEquals(2, f.trackCalls.size)
+        assertTrue(f.browser.state.value.refreshing)
+        f.trackCalls.last()(Result.success(page)); f.flush()
+        assertFalse(f.browser.state.value.refreshing)
+        f.browser.tracks(playlist); f.flush()
+        assertEquals(2, f.trackCalls.size)
+    }
+
+    @Test fun cacheOnlyOpenNeverFetchesMissingPagesDespiteRecentSuccess() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+        f.store.playlists = null
+        f.browser.playlists(refresh = false); f.flush()
+        f.browser.playlists(offset = 30, refresh = false); f.flush()
+        assertEquals(1, f.playlistCalls.size)
+        assertFalse(f.browser.state.value.refreshing)
+        assertNull(f.browser.state.value.content)
+    }
+
     @Test fun unverifiedSavedIdentityCanBrowseButNeverStartsNetworkOrMarksLoginVerified() {
         val f = Fixture(); f.identity = f.identity!!.copy(verified = false); f.store.playlists = saved
         f.browser.accountChanged(); f.flush()

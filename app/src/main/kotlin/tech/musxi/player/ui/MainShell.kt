@@ -203,6 +203,7 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
         }
     }
     val tracks by libraryViewModel.tracks.collectAsStateWithLifecycle()
+    val managementBusy by app.playlists.busyPlatforms.collectAsStateWithLifecycle()
     val playlistSearch by libraryViewModel.playlistSearch.collectAsStateWithLifecycle()
     // The library tab's page stack (root list, then a playlist) and the root's scroll position,
     // hoisted so both survive switching tabs.
@@ -1014,6 +1015,42 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
     fun managePlaylists(song: tech.musxi.core.library.SongSummary, from: tech.musxi.core.library.MediaKey? = null) {
         membership.open(song, pinned = from)
     }
+    val playlistManagement = remember {
+        tech.musxi.player.ui.library.PlaylistManagementController(
+            actions = object : tech.musxi.player.ui.library.PlaylistManagementActions {
+                override fun capabilities(platform: Platform) = app.playlists.capabilities(platform)
+                override fun info(key: tech.musxi.core.library.MediaKey, result: (Result<tech.musxi.core.library.PlaylistManagementInfo>) -> Unit) =
+                    app.playlists.managementInfo(key, result)
+                override fun create(platform: Platform, name: String, result: (Result<tech.musxi.core.library.EditablePlaylist>) -> Unit) =
+                    app.playlists.createPlaylist(platform, name, result)
+                override fun rename(target: tech.musxi.core.library.EditablePlaylist, name: String, result: (Result<Unit>) -> Unit) =
+                    app.playlists.renamePlaylist(target, name, result)
+                override fun delete(target: tech.musxi.core.library.EditablePlaylist, result: (Result<tech.musxi.core.library.PlaylistDeletionResult>) -> Unit) =
+                    app.playlists.deletePlaylist(target, result)
+                override fun refresh(platform: Platform) {
+                    app.playlists.catalog(platform).refresh()
+                }
+            },
+            onNotice = notice::show,
+            onDeleted = { key ->
+                if (libraryViewModel.tracks.value.playlist?.key == key && libraryNav.stack.top == "playlist") libraryNav.pop()
+            },
+        )
+    }
+    LaunchedEffect(libraryNav.depth) { playlistManagement.pageChanged() }
+    LaunchedEffect(playlists.filter.platform, connectedGenerations, librarySegmentLocal) {
+        playlists.filter.platform?.let { platform ->
+            if (librarySegmentLocal) playlistManagement.dismissMenu()
+            else playlistManagement.sync(platform, connectedGenerations[platform])
+        }
+    }
+    LifecycleStartEffect(tab == ShellTab.LIBRARY && libraryNav.depth == 1 && !librarySegmentLocal, playlists.filter.platform) {
+        val platform = libraryViewModel.playlists.value.filter.platform
+        if (tab == ShellTab.LIBRARY && libraryNav.depth == 1 && !librarySegmentLocal && platform != null) {
+            app.playlists.catalog(platform).open()
+        }
+        onStopOrDispose { platform?.let { app.playlists.catalog(it).cancel() } }
+    }
 
     // The shell's page colour is behind the bars unless the player covers it; the player then
     // reports its own backdrop, composed later, and wins.
@@ -1266,6 +1303,30 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
                                     playlists.filter.platform?.let { app.playbackJournal.removeRecent(it, song.key) }
                                 },
                                 listState = libraryList,
+                                canCreatePlaylist = playlists.filter.platform?.let { app.playlists.capabilities(it).create } == true,
+                                onCreatePlaylist = playlistManagement::openCreate,
+                                management = playlistManagement.menu,
+                                onPlaylistMenu = playlistManagement::openMenu,
+                                onDismissManagement = playlistManagement::dismissMenu,
+                                onRenamePlaylist = playlistManagement::openRename,
+                                onDeletePlaylist = playlistManagement::openDelete,
+                                onMovePlaylist = { key, before, revision -> libraryViewModel.movePlaylist(key, before, revision, notice::show) },
+                                onMoveToStart = {
+                                    val key = playlistManagement.menu?.playlist?.key ?: return@LibraryContent
+                                    libraryViewModel.movePlaylistToStart(key, playlists.revision, notice::show)
+                                    playlistManagement.dismissMenu()
+                                },
+                                onMoveToEnd = {
+                                    val key = playlistManagement.menu?.playlist?.key ?: return@LibraryContent
+                                    if (!playlists.complete) notice.show("请先加载完整歌单列表")
+                                    else libraryViewModel.movePlaylist(key, null, playlists.revision, notice::show)
+                                    playlistManagement.dismissMenu()
+                                },
+                                onResetOrder = {
+                                    libraryViewModel.resetPlaylistOrder(playlists.revision, notice::show)
+                                    playlistManagement.dismissMenu()
+                                },
+                                managementEnabled = playlists.filter.platform !in managementBusy,
                             )
                         }
                         } // NavStackHost
@@ -1893,7 +1954,15 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
             tech.musxi.player.ui.components.MenuOverlayLayer(menuOverlay)
         }
         // "透明效果" off, battery saver and Android below 12 make every glass surface solid.
-        GlassHost(enabled = settings.transparencyEnabled, overlay = chrome, content = pages)
+        GlassHost(enabled = settings.transparencyEnabled, overlay = {
+            chrome()
+            playlistManagement.naming?.let { ui ->
+                tech.musxi.player.ui.library.PlaylistNameDialog(ui, playlistManagement::dismissNaming, playlistManagement::submitName)
+            }
+            playlistManagement.deleting?.let { ui ->
+                tech.musxi.player.ui.library.PlaylistDeleteDialog(ui, playlistManagement::dismissDelete, playlistManagement::confirmDelete)
+            }
+        }, content = pages)
     }
     }
 }

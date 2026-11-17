@@ -22,6 +22,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 open class MusxiApplication : Application(), PlaybackHost {
+    /** Local DSF64/128/256 through the existing PCM bridge; no native DSD/USB claim. */
+    override val dsfPlaybackEnabled: Boolean get() = true
     val settingsRepository get() = accounts.settingsRepository
     val settings get() = settingsRepository.settings
     override val mediaCardLyrics by lazy {

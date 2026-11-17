@@ -50,6 +50,10 @@ class AppLocalAudioRepository internal constructor(
     private val transferringGrants = mutableSetOf<String>()
     private val mutable = MutableStateFlow(LocalAudioLibraryState())
     val state = mutable.asStateFlow()
+    /** Read-only CUE inspection has its own lifecycle and never mutates the library. */
+    val cuePreview by lazy { CuePreviewRepository(documents, scope) }
+    /** DSF recognition is read-only; decoder acceptance is a separate, pending stage. */
+    val dsfPreview by lazy { DsfPreviewRepository(documents, scope) }
     /** Visibility changes never start extraction or release stored artwork references. */
     val artworkMode = settings.map { it.localArtworkMode }.distinctUntilChanged()
     private fun autoArtworkEnabled() = settings.value.localArtworkMode != "OFF"
@@ -230,14 +234,17 @@ class AppLocalAudioRepository internal constructor(
                         // Avoid opening sources already superseded since the selection was frozen.
                         val outdated = commands.withLock { obsoleteInspection(inspection) }
                         val observation = if (outdated != null) outdated else {
+                            var recoveryAction: LocalAudioRecoveryAction? = null
                             val error = try {
                                 sourceProbe.read(inspection.stored) { context.ensureActive() }
                                 null
                             } catch (error: CancellationException) { throw error }
-                            catch (error: LocalAudioFailure) { error.error }
+                            catch (error: LocalAudioFailure) { recoveryAction = error.recoveryAction; error.error }
                             commands.withLock {
                                 context.ensureActive()
-                                recordInspection(inspection, error)
+                                recordInspection(inspection, error).let {
+                                    it.copy(recoveryAction = if (it.applied && it.error == error) recoveryAction else null)
+                                }
                             }
                         }
                         observations += observation
@@ -426,6 +433,129 @@ class AppLocalAudioRepository internal constructor(
         store.renameBookmark(id, name.trim())
     }
 
+    /** Commit exactly an accepted preview. Re-reads all inputs, and stores every slice atomically. */
+    fun importCue(folderId: String, cue: Uri, audioUris: List<Uri>,
+        expectedPreviewRevision: Long, expectedRevision: Long,
+        bindings: Map<Int, Int> = emptyMap(), mode: LocalImportMode = LocalImportMode.COPY,
+        grantedFlags: Int = 0, result: (Result<List<LocalAudioItem>>) -> Unit = {}): Job {
+        val uris = audioUris.toList()
+        val mapping = bindings.toMap()
+        val accepted = cuePreview.stampFor(expectedPreviewRevision)
+        if (importJob?.isCompleted == false || transferJob?.isCompleted == false) return scope.launch {
+            result(Result.failure(LocalAudioFailure(LocalAudioError.LIMIT_REACHED)))
+        }
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            initialization.join()
+            val response = try {
+                val items = withContext(Dispatchers.IO) {
+                    importGate.withLock {
+                        val context = currentCoroutineContext()
+                        var copied: CopiedLocalAudio? = null
+                        var lease: LocalArtworkLease? = null
+                        importing.value = LocalAudioImportState(running = true)
+                        try {
+                            commands.withLock {
+                                requireReady()
+                                if (state.value.revision != expectedRevision || accepted == null ||
+                                    cuePreview.stampFor(expectedPreviewRevision) != accepted)
+                                    throw LocalAudioFailure(LocalAudioError.STALE_STATE)
+                                if (state.value.folders.none { it.id == folderId }) throw LocalAudioFailure(LocalAudioError.NOT_FOUND)
+                            }
+                            val selection = cuePreview.inspectSelection(cue, uris, mapping)
+                            if (selection.stamp != accepted) throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
+                            val preview = selection.preview
+                            if (!preview.canProceed || preview.files.size != 1) throw LocalAudioFailure(LocalAudioError.UNSUPPORTED_AUDIO)
+                            val selected = preview.files.single().candidateIndex ?: throw LocalAudioFailure(LocalAudioError.INVALID_TARGET)
+                            val uri = uris[selected]
+                            val candidate = preview.candidates.first { it.index == selected }
+                            val before = documents.describe(uri)
+                            before.readError?.let { throw LocalAudioFailure(it) }
+                            importing.value = importing.value.copy(total = preview.tracks.size, currentName = candidate.name,
+                                expectedBytes = before.size)
+                            if (mode == LocalImportMode.REFERENCE) commands.withLock {
+                                acquireSourceRead(uri, grantedFlags)
+                                importingGrants.add(uri.toString())
+                            } else {
+                                copied = files.copy({ documents.open(uri) }, before.size, { context.ensureActive() }) { count ->
+                                    importing.value = importing.value.copy(copiedBytes = count)
+                                }
+                                withContext(NonCancellable) { commands.withLock { importingCopies.add(copied.name) } }
+                            }
+                            context.ensureActive()
+                            val after = documents.describe(uri)
+                            after.readError?.let { throw LocalAudioFailure(it) }
+                            if ((before.size != null && after.size != before.size) ||
+                                (before.modifiedAtMs != null && after.modifiedAtMs != before.modifiedAtMs))
+                                throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
+                            // Also catch changed CUE/headers while a large COPY was in flight.
+                            if (cuePreview.inspectSelection(cue, uris, mapping).stamp != accepted)
+                                throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
+                            val size = copied?.bytes ?: before.size
+                            val wholeMetadata = LocalAudioMetadata(candidate.name, preview.title, preview.performer,
+                                candidate.durationUs!! / 1_000, size, before.modifiedAtMs)
+                            val readUri = copied?.let { Uri.fromFile(files.resolve(it.name)) } ?: uri
+                            lease = if (autoArtworkEnabled()) artwork?.prepare(readUri, wholeMetadata) { context.ensureActive() } else null
+                            val base = copied?.name ?: AndroidLocalAudioDocuments.identity(uri)
+                            val sourceFacts = listOf(mode.name, base, selection.cueDigest, candidate.sampleRate,
+                                candidate.totalSamples, candidate.channels, candidate.bitsPerSample, size,
+                                if (mode == LocalImportMode.REFERENCE) before.modifiedAtMs else null).joinToString("\n")
+                            val tracks = preview.tracks.map { track ->
+                                val start = track.startFrame!! * 1_000_000 / 75
+                                val end = track.endFrameExclusive?.let { it * 1_000_000 / 75 } ?: candidate.durationUs!!
+                                val segment = LocalAudioSegment(start, end, track.number)
+                                val identityBytes = "$sourceFacts\n${track.number}\n$start\n$end".toByteArray(Charsets.UTF_8)
+                                val identity = "cue-v1:" + MessageDigest.getInstance("SHA-256").digest(identityBytes)
+                                    .joinToString("") { "%02x".format(it.toInt() and 255) }
+                                val source = LocalAudioSource(mode, copied?.name ?: uri.toString(), identity,
+                                    if (mode == LocalImportMode.REFERENCE) uri.toString() else null)
+                                LocalCueImportTrack(wholeMetadata.copy(title = track.title, creator = track.performer,
+                                    durationMs = segment.durationMs, artworkKey = lease?.key), source, segment)
+                            }
+                            commands.withLock {
+                                context.ensureActive()
+                                if (cuePreview.stampFor(expectedPreviewRevision) != accepted) throw LocalAudioFailure(LocalAudioError.STALE_STATE)
+                                val stored = store.importCue(folderId, tracks, expectedRevision) { context.ensureActive() }
+                                stored.forEach { nextSourceObservation(it.id) }
+                                importing.value = importing.value.copy(processed = stored.size,
+                                    results = stored.map { LocalAudioImportResult(it.title, it.id) })
+                                publish()
+                                stored
+                            }
+                        } finally {
+                            withContext(NonCancellable) { commands.withLock {
+                                lease?.close()
+                                copied?.let { copy ->
+                                    importingCopies.remove(copy.name)
+                                    if (copy.created && runCatching { copy.name !in store.retainedCopyNames() }.getOrDefault(false)) files.discard(copy.name)
+                                }
+                                importingGrants.clear()
+                                pruneArtwork()
+                                releaseUnusedGrants()
+                                importing.value = importing.value.copy(running = false, currentName = null)
+                            } }
+                        }
+                    }
+                }
+                Result.success(items)
+            } catch (error: CancellationException) {
+                importing.value = importing.value.copy(running = false, currentName = null, cancelled = true)
+                throw error
+            } catch (error: Exception) {
+                val mapped = if (error is PreviewFailure) LocalAudioFailure(when (error.reason) {
+                    CuePreviewError.PERMISSION_REQUIRED -> LocalAudioError.PERMISSION_REQUIRED
+                    CuePreviewError.NOT_FOUND -> LocalAudioError.NOT_FOUND
+                    CuePreviewError.TOO_LARGE -> LocalAudioError.TOO_LARGE
+                    else -> LocalAudioError.READ_FAILED
+                }) else failure(error)
+                mutable.value = mutable.value.copy(error = mapped.error)
+                Result.failure(mapped)
+            }
+            result(response)
+        }
+        importJob = job
+        job.start()
+        return job
+    }
     /** Pass the flags returned by ACTION_OPEN_DOCUMENT, not invented permission flags. */
     fun importFiles(
         folderId: String,
@@ -476,6 +606,8 @@ class AppLocalAudioRepository internal constructor(
             val context = currentCoroutineContext()
             val stored = commands.withLock {
                 val value = store.source(audioId) ?: throw LocalAudioFailure(LocalAudioError.NOT_FOUND)
+                // Exporting a shared source as if it were one slice would produce the wrong song.
+                if (value.item.segment != null) throw LocalAudioFailure(LocalAudioError.INVALID_TARGET)
                 if (value.source.mode == LocalImportMode.COPY) transferringCopies.add(value.source.location)
                 else value.source.grantUri?.let(transferringGrants::add)
                 value
@@ -676,13 +808,16 @@ class AppLocalAudioRepository internal constructor(
         result: (Result<Unit>) -> Unit = {},
     ): Job = submit(result) {
         val previous = store.source(audioId) ?: throw LocalAudioFailure(LocalAudioError.NOT_FOUND)
+        if (previous.item.segment != null) throw LocalAudioFailure(LocalAudioError.INVALID_TARGET)
         if (previous.source.mode != LocalImportMode.REFERENCE) throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
         try {
             acquireSourceRead(uri, grantedFlags, explicit = true)
-            val metadata = documents.metadata(documents.describe(uri))
-            documents.open(uri).use { if (it.read() < 0) throw LocalAudioFailure(LocalAudioError.READ_FAILED) }
             val context = currentCoroutineContext()
-            val lease = if (autoArtworkEnabled()) artwork?.prepare(uri, metadata) { context.ensureActive() } else null
+            val document = documents.describe(uri)
+            val metadata = documents.metadataForImport(document, LocalImportMode.REFERENCE) { context.ensureActive() }
+            documents.open(uri).use { if (it.read() < 0) throw LocalAudioFailure(LocalAudioError.READ_FAILED) }
+            val lease = if (autoArtworkEnabled() && !DsfPlaybackSupport.isCandidate(document.name, document.mime))
+                artwork?.prepare(uri, metadata) { context.ensureActive() } else null
             try {
                 context.ensureActive()
                 store.relink(audioId, metadata.copy(artworkKey = lease?.key), LocalAudioSource(LocalImportMode.REFERENCE, uri.toString(),
@@ -695,6 +830,42 @@ class AppLocalAudioRepository internal constructor(
         } finally { releaseUnusedGrants() }
     }
 
+    /** Explicit bounded read; does not acquire grants, update the library or retain URIs in state. */
+    fun inspectFormat(audioId: String, result: (Result<LocalAudioFormatInfo>) -> Unit = {}): Job = scope.launch {
+        initialization.join()
+        val response = try {
+            val value = withContext(Dispatchers.IO) {
+                val context = currentCoroutineContext()
+                val stored = commands.withLock {
+                    requireReady()
+                    store.source(audioId) ?: throw LocalAudioFailure(LocalAudioError.NOT_FOUND)
+                }
+                val uri = sourceProbe.read(stored) { context.ensureActive() }
+                context.ensureActive()
+                val facts = LocalAudioFormatInspector.inspect {
+                    if (stored.source.mode == LocalImportMode.COPY) files.resolve(stored.source.location).inputStream()
+                    else documents.open(uri)
+                }
+                commands.withLock {
+                    context.ensureActive()
+                    val latest = store.source(audioId) ?: throw LocalAudioFailure(LocalAudioError.NOT_FOUND)
+                    if (sourceVersion(latest) != sourceVersion(stored)) throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
+                }
+                LocalAudioFormatInfo(audioId, facts?.codec, facts?.sampleRateHz, facts?.bitsPerSample, facts?.channelCount)
+            }
+            Result.success(value)
+        } catch (error: CancellationException) { throw error }
+        catch (error: Exception) {
+            Result.failure(when (error) {
+                is LocalAudioFailure -> error
+                is SecurityException -> LocalAudioFailure(LocalAudioError.PERMISSION_REQUIRED)
+                is java.io.FileNotFoundException -> LocalAudioFailure(LocalAudioError.NOT_FOUND)
+                else -> LocalAudioFailure(LocalAudioError.READ_FAILED)
+            })
+        }
+        currentCoroutineContext().ensureActive()
+        result(response)
+    }
     /** Metadata-only queue; UI/controller never receives document references or managed paths. */
     internal suspend fun preparePlayback(folderId: String?, audioId: String? = null, fromStart: Boolean = false): LocalAudioPlaybackQueue =
         withContext(Dispatchers.IO) {
@@ -712,7 +883,8 @@ class AppLocalAudioRepository internal constructor(
                 val progress = snapshot.progress.associateBy { it.audioId }
                 val entries = ids.map { id ->
                     val stored = store.source(id) ?: throw LocalAudioFailure(LocalAudioError.NOT_FOUND)
-                    val offset = progress[id]?.takeUnless { it.completed }?.positionMs?.takeIf { resume } ?: 0
+                    val offset = (progress[id]?.takeUnless { it.completed }?.positionMs?.takeIf { resume } ?: 0)
+                        .coerceAtMost(stored.item.segment?.durationMs ?: LocalAudioLimits.MAX_POSITION_MS)
                     LocalAudioQueueEntry(stored.item, sourceVersion(stored), offset)
                 }
                 val chosen = audioId ?: if (fromStart) ids.first() else snapshot.cursors.firstOrNull { it.folderId == folderId }?.audioId ?: ids.first()
@@ -733,7 +905,8 @@ class AppLocalAudioRepository internal constructor(
                 val stored = store.source(entry.audioId) ?: return@mapIndexedNotNull null
                 if (sourceVersion(stored) != entry.sourceVersion) throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
                 val previous = progress[entry.audioId]
-                val position = if (saved.continuePlayback) previous?.takeUnless { it.completed }?.positionMs ?: 0 else 0
+                val position = (if (saved.continuePlayback) previous?.takeUnless { it.completed }?.positionMs ?: 0 else 0)
+                    .coerceAtMost(stored.item.segment?.durationMs ?: LocalAudioLimits.MAX_POSITION_MS)
                 index to LocalAudioQueueEntry(stored.item, entry.sourceVersion, position)
             }
             if (surviving.isEmpty()) throw LocalAudioFailure(LocalAudioError.NOT_FOUND)
@@ -749,7 +922,8 @@ class AppLocalAudioRepository internal constructor(
             val remap = surviving.mapIndexed { new, pair -> pair.first to new }.toMap()
             val order = saved.shuffleOrder.mapNotNull(remap::get)
             LocalAudioPlaybackQueue(saved.folderId?.takeIf { id -> snapshot.folders.any { it.id == id } },
-                surviving.map { it.second }, current, position, saved.continuePlayback,
+                surviving.map { it.second }, current,
+                position.coerceAtMost(surviving[current].second.audio.segment?.durationMs ?: LocalAudioLimits.MAX_POSITION_MS), saved.continuePlayback,
                 saved.repeatMode, saved.shuffleEnabled, order, saved.useStoredProgress)
         }
     }
@@ -766,15 +940,16 @@ class AppLocalAudioRepository internal constructor(
             captureInspection(stored)
         }
         var uri: Uri? = null
+        var recoveryAction: LocalAudioRecoveryAction? = null
         val error = try {
             uri = sourceProbe.read(inspection.stored) { context.ensureActive() }
             null
         } catch (error: CancellationException) { throw error }
-        catch (error: LocalAudioFailure) { error.error }
+        catch (error: LocalAudioFailure) { recoveryAction = error.recoveryAction; error.error }
         commands.withLock {
             context.ensureActive()
             val observation = recordInspection(inspection, error, playback = true)
-            observation.error?.let { throw LocalAudioFailure(it) }
+            observation.error?.let { throw LocalAudioFailure(it, if (it == error) recoveryAction else null) }
             LocalAudioPlaybackSource(store.source(audioId)!!.item, uri!!)
         }
     }
@@ -881,7 +1056,10 @@ class AppLocalAudioRepository internal constructor(
                                     LocalAudioImportResult(document.name, importOne(targetFolder, document, grant,
                                         refreshing?.stored?.link?.mode ?: mode, flags, refreshing).id)
                                 } catch (error: CancellationException) { throw error }
-                                catch (error: Exception) { LocalAudioImportResult(document.name, error = failure(error).error) }
+                                catch (error: Exception) {
+                                    val failed = failure(error)
+                                    LocalAudioImportResult(document.name, error = failed.error, recoveryAction = failed.recoveryAction)
+                                }
                                 results += item
                                 importing.value = importing.value.copy(processed = results.size, results = results.toList())
                                 commands.withLock { publish() }
@@ -953,11 +1131,20 @@ class AppLocalAudioRepository internal constructor(
             acquireSourceRead(grant, flags)
             importingGrants.add(grant.toString())
         }
-        val metadata = documents.metadata(document)
+        val metadata = documents.metadataForImport(document, mode) { context.ensureActive() }
+        val dsfInfo = if (DsfPlaybackSupport.isCandidate(document.name, document.mime)) {
+            val header = documents.readRange(document.uri, 0, DsfFileParser.HEADER_SIZE) { context.ensureActive() }
+                ?: throw LocalAudioFailure(LocalAudioError.READ_FAILED)
+            try { DsfFileParser.parse(header, document.size).also {
+                if (!DsfPlaybackSupport.supports(it) || it.durationMs != metadata.durationMs)
+                    throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
+            } }
+            catch (_: DsfParseFailure) { throw LocalAudioFailure(LocalAudioError.UNSUPPORTED_AUDIO) }
+        } else null
         context.ensureActive()
         if (mode == LocalImportMode.REFERENCE) {
             documents.open(document.uri).use { if (it.read() < 0) throw LocalAudioFailure(LocalAudioError.READ_FAILED) }
-            val lease = if (autoArtworkEnabled()) artwork?.prepare(document.uri, metadata) { context.ensureActive() } else null
+            val lease = if (autoArtworkEnabled() && dsfInfo == null) artwork?.prepare(document.uri, metadata) { context.ensureActive() } else null
             try {
                 return commands.withLock {
                     context.ensureActive()
@@ -980,12 +1167,22 @@ class AppLocalAudioRepository internal constructor(
             var lease: LocalArtworkLease? = null
             try {
                 context.ensureActive()
-                lease = if (autoArtworkEnabled()) artwork?.prepare(Uri.fromFile(files.resolve(copied.name)), metadata) { context.ensureActive() } else null
+                var copyMetadata = metadata
+                if (dsfInfo != null) {
+                    val tags = validateDsfCopy(files.resolve(copied.name), dsfInfo) { context.ensureActive() }
+                    copyMetadata = metadata.copy(title = LocalAudioNames.clean(tags?.title),
+                        creator = LocalAudioNames.clean(tags?.artist))
+                    val after = documents.describe(document.uri)
+                    after.readError?.let { throw LocalAudioFailure(it) }
+                    if (after.size != document.size || after.modifiedAtMs != document.modifiedAtMs)
+                        throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
+                }
+                lease = if (autoArtworkEnabled() && dsfInfo == null) artwork?.prepare(Uri.fromFile(files.resolve(copied.name)), metadata) { context.ensureActive() } else null
                 commands.withLock {
                     context.ensureActive()
                     refreshing?.let(::ensureDirectoryCurrent)
                     if (files.resolve(copied.name).length() != copied.bytes) throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
-                    val item = store.importAudio(folderId, metadata.copy(sizeBytes = copied.bytes, artworkKey = lease?.key), LocalAudioSource(mode, copied.name, copied.name), origin)
+                    val item = store.importAudio(folderId, copyMetadata.copy(sizeBytes = copied.bytes, artworkKey = lease?.key), LocalAudioSource(mode, copied.name, copied.name), origin)
                     nextSourceObservation(item.id)
                     importing.value = importing.value.copy(copiedBytes = copied.bytes)
                     item
@@ -1067,6 +1264,9 @@ class AppLocalAudioRepository internal constructor(
                 output.writeLong(value.item.metadata.sizeBytes ?: -1)
                 // Preserve legacy hashes until a provider supplies a reliable modification value.
                 if (value.source.mode == LocalImportMode.REFERENCE) value.item.metadata.modifiedAtMs?.let { output.writeLong(it) }
+                value.item.segment?.let {
+                    output.writeUTF("cue-segment-v1"); output.writeLong(it.startUs); output.writeLong(it.endUs); output.writeInt(it.trackNumber)
+                }
             }
             return MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray()).joinToString("") { "%02x".format(it.toInt() and 255) }
         }

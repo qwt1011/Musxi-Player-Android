@@ -512,7 +512,8 @@ class AccountRepository(context: Context) {
     fun createPlaylistCatalog(fetch: LibraryPageFetch, platform: Platform): PlaylistCatalog {
         val browser = createLibraryBrowser(fetch, platform)
         val catalog = PlaylistCatalog(platform, browser, { playbackIdentity(platform) },
-            PlaylistOrderAccess { expected, change, result -> playlistOrder(platform, expected, change, result) })
+            PlaylistOrderAccess { expected, change, result -> playlistOrder(platform, expected, change, result) },
+            continuationStride = if (platform == Platform.KUGOU) 30 else null)
         scope.launch { browser.state.collect { catalog.accept(it) } }
         scope.launch {
             states.map { it.getValue(platform) }.distinctUntilChanged().collect { catalog.accountChanged() }

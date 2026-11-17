@@ -1,6 +1,6 @@
 # 前端接入约定
 
-> **状态：现行接入总览，2026-11-13 更新。** 本文只维护应用入口、接口边界和专门合同；后端/界面/实机完成度统一见[能力状态](feature-status.md)，当前任务和基线见[开发接续](next-session-handoff.md)。原总览的早期阶段描述保存在[历史总览](history/frontend-contract-through-20261028.md)。
+> **状态：现行接入总览，2026-11-17 更新。** 本文只维护应用入口、接口边界和专门合同；后端/界面/实机完成度统一见[能力状态](feature-status.md)，当前任务和基线见[开发接续](next-session-handoff.md)。原总览的早期阶段描述保存在[历史总览](history/frontend-contract-through-20261028.md)。
 
 ## 接口边界
 
@@ -10,6 +10,9 @@ UI 观察公开 StateFlow，通过命令和结果回调发起操作；不持有 
 
 | 能力 | 入口 | 详细约定 |
 | --- | --- | --- |
+| DSF预览／本地播放 | `localAudio.dsfPreview`、既有导入与播放接口 | [现行本地合同](frontend-backend-contract-local-audio.md#dsf只读预览与本地播放边界)；正常能力已启用，64／128复制／引用及新进程读回通过；恢复提示页面与正式签名包另验，见[DSF正常生产启用验收](backend-dsf-enablement-20261117.md) |
+| 音频格式事实 | `localAudio.inspectFormat`、`playback.audioInfo` | [第三批合同](backend-audio-format-info-20261114.md)，区分来源、解码器、应用AudioTrack与未知物理输出 |
+| CUE只读预览 | `localAudio.cuePreview` | [CUE第一批](backend-cue-preview-20261114.md)，显式文件选择与绑定、动态曲目、解析与范围检查；入库／播放见[第二批合同](backend-cue-import-playback-20261114.md) |
 | 账号、头像、会员与登录 | `accounts` | 账号状态与错误；资料刷新不改变同一账号代次；会员不代表逐曲版权 |
 | 曲库、分页与缓存 | `libraryBrowser` / `qqLibraryBrowser` / `kugouLibraryBrowser` | [数据增量](frontend-backend-contract-p1.md)，刷新失败保留已有内容；[主动补全歌单缓存](backend-requests-20261111-3.md#交付说明)的 `fillPlaylist/fillState/cancelFill` |
 | 搜索与实体歌曲 | `searchBrowser` / `catalog` | [第四批合同](backend-batch4-contract.md)，实体 ID 缺失不猜测 |

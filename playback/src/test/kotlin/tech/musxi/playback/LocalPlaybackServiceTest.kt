@@ -365,6 +365,96 @@ class LocalPlaybackServiceTest {
         assertEquals(takeovers, app.localTakeovers)
     }
 
+    @Test fun cueSlicesUseOneSourceTicketButIndependentClipRangesAndBoundedProgress() {
+        val first = entry("第一分曲", 5_000, LocalAudioSegment(0, 10_000_000, 1))
+        val second = entry("第二分曲", 99_000, LocalAudioSegment(10_000_000, 20_000_000, 2))
+        val segmented = LocalAudioPlaybackQueue(null, listOf(first, second), 1, 99_000)
+
+        assertEquals(0, apply(QueueCommandMailbox.Action.LocalReplace(segmented, false)))
+        assertEquals(2, player.mediaItemCount)
+        assertTrue(app.resolved.isEmpty()) // Installing an idle queue does not open any document.
+        assertEquals(0L, player.getMediaItemAt(0).clippingConfiguration.startPositionUs)
+        assertEquals(10_000_000L, player.getMediaItemAt(0).clippingConfiguration.endPositionUs)
+        assertEquals(10_000_000L, player.getMediaItemAt(1).clippingConfiguration.startPositionUs)
+        assertEquals(20_000_000L, player.getMediaItemAt(1).clippingConfiguration.endPositionUs)
+        assertEquals(1, player.currentMediaItemIndex)
+        assertEquals(10_000L, player.currentPosition)
+        assertEquals(10_000L, fieldMap("localPositions")[second.audio.id])
+    }
+
+    @Test fun explicitSeekAndCheckpointClampToCurrentCueSliceWithoutAddingSourceOffset() {
+        val segmented = LocalAudioPlaybackQueue(null,
+            listOf(entry("第一分曲", 2_000, LocalAudioSegment(20_000_000, 30_000_000, 1))), 0, 2_000)
+        assertEquals(0, apply(QueueCommandMailbox.Action.LocalReplace(segmented, false)))
+        val ticket = player.currentMediaItem!!.localConfiguration!!.uri.toString()
+        val session = field("session") as androidx.media3.session.MediaSession
+
+        val handleSeek = session.player.javaClass.getDeclaredMethod("handleSeek", Int::class.javaPrimitiveType, Long::class.javaPrimitiveType, Int::class.javaPrimitiveType).apply { isAccessible = true }
+        handleSeek.invoke(session.player, 0, 40_000L, Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(10_000L, player.currentPosition)
+        assertEquals(ticket, player.currentMediaItem!!.localConfiguration!!.uri.toString())
+        call("checkpoint", arrayOf(kotlin.jvm.functions.Function1::class.java), null)
+        assertEquals(10_000L, app.positions.last().position)
+    }
+
+    @Test fun queueRestoreClampsStoredCueProgressBeforeCheckpointing() {
+        val segmented = LocalAudioPlaybackQueue(null,
+            listOf(entry("第一分曲", 1_000, LocalAudioSegment(0, 6_000_000, 1)),
+                entry("第二分曲", 90_000, LocalAudioSegment(6_000_000, 9_000_000, 2))), 0, 90_000)
+        recreate()
+        app.restoreCallback!!(Result.success(segmented))
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(2, player.mediaItemCount)
+        assertEquals(6_000L, player.currentPosition)
+        assertEquals(1_000L, fieldMap("localPositions")[segmented.entries[0].audio.id])
+        assertEquals(3_000L, fieldMap("localPositions")[segmented.entries[1].audio.id])
+    }
+
+    @Test fun repeatOneAllowsExplicitNextAndAudioStaysOnClippedTimeline() {
+        val segmented = LocalAudioPlaybackQueue(null,
+            listOf(entry("第一分曲", 0, LocalAudioSegment(0, 4_000_000, 1)),
+                entry("第二分曲", 0, LocalAudioSegment(4_000_000, 8_000_000, 2))),
+            0, 0, repeatMode = "ONE")
+        assertEquals(0, apply(QueueCommandMailbox.Action.LocalReplace(segmented, false)))
+
+        player.seekToNextMediaItem()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(1, player.currentMediaItemIndex)
+        assertEquals(0L, player.currentPosition)
+        player.seekTo(1, 4_000)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(4_000L, player.currentPosition)
+        assertEquals(Player.REPEAT_MODE_ONE, player.repeatMode)
+    }
+
+    @Test fun audioFactsAreFencedByPeriodAndClearedOnQueueReplacementAndServiceDestroy() {
+        val timeline = player.currentTimeline
+        val uid = timeline.getPeriod(player.currentPeriodIndex, androidx.media3.common.Timeline.Period(), true).uid!!
+        fun event(id: Any) = androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime(0, timeline, 0,
+            androidx.media3.exoplayer.source.MediaSource.MediaPeriodId(id), 0, timeline, 0,
+            androidx.media3.exoplayer.source.MediaSource.MediaPeriodId(id), 0, 0)
+        val methods = arrayOf(androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime::class.java, kotlin.jvm.functions.Function1::class.java)
+        val input: (Any) -> Unit = { token ->
+            (field("audioInfo") as AudioInfoTracker).input(token, AudioFormatFacts("FLAC", 44100, 16, 2))
+        }
+        call("observedAudioEvent", methods, event(uid), input)
+        assertEquals("FLAC", audioInfoSnapshot.value.source!!.codec)
+        call("observedAudioEvent", methods, event("old-period"), { token: Any ->
+            (field("audioInfo") as AudioInfoTracker).input(token, AudioFormatFacts("MP3"))
+        })
+        assertEquals("FLAC", audioInfoSnapshot.value.source!!.codec)
+        val next = LocalAudioPlaybackQueue(null, listOf(entry("new", 0)), 0, 0)
+        apply(QueueCommandMailbox.Action.LocalReplace(next, false))
+        assertNull(audioInfoSnapshot.value.source)
+        assertEquals(player.currentMediaItem!!.mediaId, audioInfoSnapshot.value.mediaId)
+        service.onDestroy()
+        assertEquals(PlaybackAudioInfo(), audioInfoSnapshot.value)
+        // Recreate for normal teardown, without reusing a released player.
+        service = Robolectric.buildService(MusxiPlaybackService::class.java).create().get()
+        player = field("player") as ExoPlayer
+    }
     private fun recreate() {
         service.onDestroy()
         shadowOf(Looper.getMainLooper()).idle()
@@ -387,11 +477,18 @@ class LocalPlaybackServiceTest {
         MusxiPlaybackService::class.java.getDeclaredMethod(name, *args).apply { isAccessible = true }.invoke(service, *values)
     private fun entry(title: String, resume: Long): LocalAudioQueueEntry = LocalAudioQueueEntry(
         LocalAudioItem(LocalAudioLimits.newId(), LocalAudioMetadata("$title.mp3"), LocalImportMode.COPY, addedAtMs = 0), "a".repeat(64), resume)
+    private fun entry(title: String, resume: Long, segment: LocalAudioSegment): LocalAudioQueueEntry = LocalAudioQueueEntry(
+        LocalAudioItem(LocalAudioLimits.newId(), LocalAudioMetadata("disc.flac", title = title,
+            durationMs = segment.durationMs), LocalImportMode.COPY, addedAtMs = 0, segment = segment), "a".repeat(64), resume)
+    @Suppress("UNCHECKED_CAST")
+    private fun fieldMap(name: String): Map<String, Long> =
+        MusxiPlaybackService::class.java.getDeclaredField(name).apply { isAccessible = true }.get(service) as Map<String, Long>
 }
 
 class LocalPlaybackTestApplication : Application(), PlaybackHost {
     data class Position(val folder: String?, val id: String, val position: Long, val completed: Boolean)
     val positions = mutableListOf<Position>()
+    val resolved = mutableListOf<String>()
     val savedQueues = mutableListOf<SavedLocalAudioQueue>()
     val deactivations = mutableListOf<Boolean>()
     var restoreCallback: ((Result<LocalAudioPlaybackQueue?>) -> Unit)? = null
@@ -428,7 +525,8 @@ class LocalPlaybackTestApplication : Application(), PlaybackHost {
             if (delaySpeed) finishSpeed = complete else complete()
         }
         override fun isQueueCurrent(queue: LocalAudioPlaybackQueue) = acceptPreparedQueue
-        override fun resolve(entry: LocalAudioQueueEntry) = "content://test/${entry.audio.id}"
+        override fun resolve(entry: LocalAudioQueueEntry): String =
+            "content://test/${entry.audio.id}".also { resolved += it }
         override fun checkpoint(folderId: String?, audioId: String, positionMs: Long, completed: Boolean, result: (Result<Unit>) -> Unit) {
             positions += Position(folderId, audioId, positionMs, completed)
             result(Result.success(Unit))

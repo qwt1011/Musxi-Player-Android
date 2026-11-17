@@ -6,6 +6,12 @@ import tech.musxi.core.library.*
 
 /** Fixed synthetic loader failures for device acceptance. Entire class is absent from release. */
 class DebugMusxiApplication : MusxiApplication() {
+    /** Legacy acceptance override only. A fresh process inherits the normal production capability. */
+    @Volatile private var dsfAcceptanceOverride: Boolean? = null
+    @Volatile var dsfDeviceAcceptance = false
+        set(value) { field = value; dsfAcceptanceOverride = value }
+    override val dsfPlaybackEnabled: Boolean get() = dsfAcceptanceOverride ?: super.dsfPlaybackEnabled
+    override val experimentalDsfDecoding: Boolean get() = dsfPlaybackEnabled
     override fun lockScreenLyricsHostClass() = LockScreenPageProbeActivity::class.java
     var translationDelayOnce = false
     var translationFailureOnce = false

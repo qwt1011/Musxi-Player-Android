@@ -4,6 +4,8 @@
 
 ## 入口与线程
 
+2026-11-14新增只读`localAudio.cuePreview`：CUE选择、解析、显式来源关联和预览，见[CUE第一批合同](backend-cue-preview-20261114.md)。预览不创建虚拟曲目；第二批新增[原子入库与分段播放](backend-cue-import-playback-20261114.md)，沿用COPY／REFERENCE与本地队列。
+
 `MusxiApplication.localAudio` 为延迟初始化的 `AppLocalAudioRepository`。命令在主线程调用，返回可取消的 `Job`；短数据库事务串行在 IO dispatcher 执行，批量复制和文档读取不长时间占数据库锁，普通结果 callback 返回主线程。`state` 为 `StateFlow<LocalAudioLibraryState>`；`imports` 为 `StateFlow<LocalAudioImportState>`。等待 `ready=true` 再操作；初始化失败保留错误，不重建空库覆盖原数据。
 
 状态只含 ID、名称、元数据、归属、进度、书签和枚举错误。`LocalAudioSource`、`LocalAudioDocument` 和原始 URI 只用于导入/后端授权，不保存到界面状态、日志或媒体控制器。
@@ -187,7 +189,19 @@
 
 本地服务现已在切换、暂停/音频焦点变化、自然结束与周期检查点自动调用。已完成条目保存 `completed=true`，下次继续从零重听；曲末定时暂停也标记完成。每音频共享一份进度，每文件夹单独保存最后条目；删除文件夹后播放中的该音频仍可保存进度，不再写文件夹游标。UI 不自行启动第二个播放器。
 
+## DSF只读预览与本地播放边界
+
+2026-11-17正常生产能力已启用，预览、导入、目录候选、来源探测与Extractor共用 `PlaybackHost.dsfPlaybackEnabled`；正式应用返回true，fresh debug继承，临时验收覆盖只作用于当前debug进程。接口保持兼容。首版解码范围是DSF中的DSD64／128／256、单／双声道，经176.4kHz浮点PCM交现有播放器。物理设备输出、原生DSD／DoP／USB独占、DFF／DST、DSD512及多声道不在该承诺内。
+
+`localAudio.dsfPreview.preview(uri, callback)`、`state`、`cancel/clear` 只读固定头与有界随机标签，不获取持久授权、不入库。`playbackSupported` 根据格式、大小／时长、应用能力及随机读取计算；不能硬编码false，也不能因识别扩展名而硬编码true。单声道代码支持，尚无独立实机证据。
+
+REFERENCE导入／重关联与播放来源探测继续要求权限有效、来源未变化及可随机读取。非随机来源返回 `READ_FAILED`，可选 `LocalAudioFailure.recoveryAction`、`LocalAudioImportResult.recoveryAction`、`LocalAudioSourceCheckResult.recoveryAction` 的 `COPY_REQUIRED` 表示应让用户选择复制，后端不自动复制。COPY验证实际私有文件头／长度并有界补标签。错误MIME选择沿用 `files(showAllFileTypes=true)`；恢复提示的正式页面未接。
+
+[DSF正常生产启用验收](backend-dsf-enablement-20261117.md)已补不调用临时setter的64／128 COPY／REFERENCE及force-stop后四条单条队列复播／控制／曲末。前轮完整音乐、切换／一小时USB、管道及两个实际authority、断电观察依各日期记录，不当成本轮听感或全机型结论。真实云端按需兼容，不再作为开放前置。本轮release编译／Lint／清单隔离与签名门禁通过，正式签名APK／正式包实机尚未完成，已发布v0.3不含本轮改动。
+
 ## 本地播放入口与状态
+
+格式只读查询使用 `localAudio.inspectFormat(audioId, callback)`；当前播放器观察使用 `playback.audioInfo`。源格式、解码器、应用AudioTrack配置和物理设备输出分别表达；未观察字段保持null，CUE条目查询底层共享来源。支持范围、错误和接线约束见[第三批格式合同](backend-audio-format-info-20261114.md)。
 
 `MusxiApplication.localAudioPlayback.play(folderId, audioId=null, fromStart=false, playWhenReady=true, callback)` 返回 `Job`：
 

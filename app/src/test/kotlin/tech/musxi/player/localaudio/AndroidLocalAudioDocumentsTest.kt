@@ -45,6 +45,14 @@ class AndroidLocalAudioDocumentsTest {
         assertTrue(provider.queries.any { it.contains("sub/children") })
     }
 
+    @Test fun binaryDsfDirectoryCandidateFollowsTheApplicationGate() {
+        provider.includeDsf = true
+        assertFalse(documents.children(tree, false).any { it.name.endsWith(".DSF") })
+        val enabled = AndroidLocalAudioDocuments(RuntimeEnvironment.getApplication()) { true }
+        assertTrue(enabled.children(tree, false).any { it.name == "album.DSF" && it.mime == "application/octet-stream" })
+        assertFalse(enabled.children(tree, false).any { it.name.endsWith(".dff") })
+    }
+
     @Test fun fileSelectionReadsNameAndSizeAndRejectsNonAudioMetadata() {
         val audio = documents.describe(Uri.parse("content://local-audio-test/document/a"))
         assertEquals("2.mp3", audio.name)
@@ -164,6 +172,7 @@ class AndroidLocalAudioDocumentsTest {
         var error: String? = null
         var modifiedAtMs = 0L
         var rejectModificationColumn = false
+        var includeDsf = false
         val queries = mutableListOf<String>()
         override fun onCreate() = true
         override fun getType(uri: Uri) = "audio/mpeg"
@@ -201,6 +210,10 @@ class AndroidLocalAudioDocumentsTest {
                     row("sub", "子目录", DocumentsContract.Document.MIME_TYPE_DIR, 0)
                     row("img", "cover.jpg", "image/jpeg", 123)
                     row("txt", "说明.txt", "text/plain", 123)
+                    if (includeDsf) {
+                        row("dsf", "album.DSF", "application/octet-stream", 123)
+                        row("dff", "album.dff", "application/octet-stream", 123)
+                    }
                 }
             } else if (!empty) row("a", "2.mp3", "audio/mpeg", 123)
             return cursor

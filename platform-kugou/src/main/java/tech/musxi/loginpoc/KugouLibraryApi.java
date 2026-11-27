@@ -725,6 +725,7 @@ public final class KugouLibraryApi {
         EditMetadata metadata=before.editMetadata;
         if(metadata==null)throw error("incomplete");
         favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+        IOException writeFailure=null;
         try {
             JSONObject data=new JSONObject().put("listid",Long.parseLong(before.id)).put("type",0)
                 .put("total_ver",metadata.totalVersion).put("sort",metadata.sort)
@@ -733,10 +734,18 @@ public final class KugouLibraryApi {
             successAudio(response);
             if(!Arrays.asList("1","200").contains(text(response.opt("status"))))throw error("protocol");
         } catch(org.json.JSONException invalid) { throw error("protocol"); }
+        catch(KugouApi.ApiException failure) {
+            if(!"network".equals(failure.code) && !"timeout".equals(failure.code))throw failure;
+            writeFailure=failure;
+        }
+        catch(IOException failure) { writeFailure=error("network"); }
         favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
         Playlist after=accountPlaylist(session,playlistId,current);
         if(!after.editable || after.favorite || after.systemDefault)throw error("permission");
-        if(!title.equals(after.name))throw error("not_confirmed");
+        if(!title.equals(after.name)) {
+            if(writeFailure!=null)throw writeFailure;
+            throw error("not_confirmed");
+        }
         EditMetadata confirmed=after.editMetadata;
         if(confirmed==null || confirmed.sort!=metadata.sort || !confirmed.tags.equals(metadata.tags) ||
             !confirmed.intro.equals(metadata.intro))throw error("not_confirmed");
@@ -1026,7 +1035,11 @@ public final class KugouLibraryApi {
         try {
             return selectAudio(requestAudio(session,songId,nowElapsedMs,qualityId),audioProbe);
         } catch(KugouApi.ApiException denied) {
-            if(!"permission".equals(denied.code))throw denied;
+            // A basic URL response can identify another quality's hash. Never accept that
+            // response: independently prove the requested variant through the official
+            // privilege/auth chain, just as for an explicit basic-endpoint denial.
+            boolean variantMismatch="identity".equals(denied.code) && "audio_variant_hash".equals(denied.identityDiagnostic);
+            if(!"permission".equals(denied.code) && !variantMismatch)throw denied;
             if(!allowAuthorized)throw denied;
             try {
                 return authorizedAudio(session,songId,nowElapsedMs,qualityId);
@@ -1203,7 +1216,8 @@ public final class KugouLibraryApi {
         String echoed=text(data.opt("hash"));
         // The basic endpoint may echo the standard hash for a higher-quality playlist row.
         boolean standardVariant=echoed.matches("(?i)[a-f0-9]{32}") && echoed.equalsIgnoreCase(text(data.opt("std_hash")));
-        if(!echoed.isEmpty() && !hash.equalsIgnoreCase(echoed) && !standardVariant)throw error("identity");
+        if(!echoed.isEmpty() && !hash.equalsIgnoreCase(echoed) && !standardVariant)
+            throw new KugouApi.ApiException("identity","Kugou audio variant requires authorization","audio_variant_hash");
         return parseAudioPayload(data,hash,now,qualityId,true);
     }
     static Audio parseAuthorizedAudio(JSONObject root,String hash,long now,String qualityId) throws IOException {
@@ -1215,7 +1229,10 @@ public final class KugouLibraryApi {
         successAudio(root);
         String echoed=text(data.opt("hash"));
         if(!hash.equalsIgnoreCase(echoed))throw error("identity");
-        return parseAudioPayload(data,hash,now,qualityId,false);
+        // Official authorized FLAC responses also return the same exact HTTP CDN hosts
+        // already supported for ordinary audio. Retain only addresses actually returned;
+        // never downgrade a synthesized HTTPS URL or extend the host allowlist.
+        return parseAudioPayload(data,hash,now,qualityId,!"kugou:high".equals(qualityId));
     }
     private static Audio parseAudioPayload(JSONObject data,String hash,long now,String qualityId,boolean allowHttpFallback) throws IOException {
         if(present(data,"freeTrialInfo") || present(data,"free_trial_info") || trialFlag(data,"is_free_part") || trialFlag(data,"IsFreePart") || trialFlag(data,"free_part"))throw error("preview");
@@ -1251,7 +1268,7 @@ public final class KugouLibraryApi {
             }
         }
         if(candidates.isEmpty())throw error("unavailable");
-        if(allowHttpFallback && ("kugou:128".equals(qualityId) || "kugou:320".equals(qualityId))) {
+        if(allowHttpFallback && !"kugou:high".equals(qualityId)) {
             for(String key:Arrays.asList("url","backupUrl")) {
                 Object values=data.opt(key);
                 if(values instanceof String)values=new JSONArray().put(values);

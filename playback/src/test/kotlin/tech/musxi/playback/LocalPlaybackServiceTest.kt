@@ -7,6 +7,8 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.ListenerSet
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaSession
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import org.junit.After
@@ -217,12 +219,147 @@ class LocalPlaybackServiceTest {
 
     @Test fun localFileFailurePausesAndNeverSearchesNetworkOrSkips() {
         val error = PlaybackException("Test unavailable", LocalAudioFailure(LocalAudioError.PERMISSION_REQUIRED), PlaybackException.ERROR_CODE_IO_NO_PERMISSION)
-        call("recover", arrayOf(PlaybackException::class.java), error)
+        emit { it.onPlayerError(error) }
         assertFalse(player.playWhenReady)
         assertEquals(0, app.alternativeRequests)
         assertEquals(0, player.currentMediaItemIndex)
         assertEquals(LocalAudioError.PERMISSION_REQUIRED, field("localFailure"))
         assertEquals(2, player.mediaItemCount)
+        val observation = PlaybackDiagnostics.state.value.last { it.stage == PlaybackDiagnosticStage.SOURCE_FAILED }
+        assertEquals(PlaybackDiagnosticMedia.LOCAL, observation.media)
+        assertEquals(PlaybackFailure.PERMISSION, observation.failure)
+        assertEquals(PlaybackException.ERROR_CODE_IO_NO_PERMISSION, observation.media3ErrorCode)
+    }
+
+    @Test fun platformRiskStopsOnTheSameSlotAndKeepsItsReasonUntilManualChoice() {
+        val original = SongSummary(MediaKey(Platform.NETEASE, "1"), "Track", listOf("Artist"), "Album", 120_000)
+        val next = original.copy(key = MediaKey(Platform.NETEASE, "2"), title = "Next")
+        val alternative = original.copy(key = MediaKey(Platform.QQ, "A0000000000001"))
+        val originalRequests = AtomicInteger()
+        app.resolvePlatform = { mediaId ->
+            if (mediaId == original.key.stableId) {
+                originalRequests.incrementAndGet()
+                throw PlaybackSourceException(PlaybackFailure.RATE_LIMIT, FailureReason.fromCategory("risk"))
+            }
+            check(mediaId == alternative.key.stableId)
+            throw PlaybackSourceException(PlaybackFailure.NETWORK) // No HTTP in this test.
+        }
+        assertEquals(0, apply(QueueCommandMailbox.Action.Replace(PlaybackQueue(listOf(original, next), 0, 1),
+            positionMs = 9000, playWhenReady = true)))
+        val ticket = player.currentMediaItem!!.localConfiguration!!.uri.toString()
+        val revision = queueSnapshot.value.revision
+        val session = field("session") as MediaSession
+        val looper = shadowOf(Looper.getMainLooper())
+        val deadline = System.nanoTime() + 5_000_000_000L
+        val failureKey = MusxiPlaybackService.EXTRA_FAILURE_REASON
+        // ExoPlayer delivers the resolver error from its load thread to the service's main looper.
+        while (session.sessionExtras.getString(failureKey) == null && System.nanoTime() < deadline) {
+            looper.idle()
+            Thread.sleep(5)
+        }
+        fun assertOriginalStopped() {
+            assertEquals(FailureReason.PLATFORM_RISK.name, session.sessionExtras.getString(failureKey))
+            assertEquals(false, field("playbackWanted"))
+            assertFalse(player.playWhenReady)
+            assertEquals(1, originalRequests.get())
+            assertEquals(original.key.stableId to 1L, (field("sources") as QueueSources).currentSource(ticket))
+        }
+        fun findAlternatives() = call("offerAlternative",
+            arrayOf(String::class.java, PlaybackFailure::class.java, Boolean::class.javaPrimitiveType!!),
+            ticket, PlaybackFailure.UNAVAILABLE, true)
+        assertOriginalStopped()
+        assertEquals(0, app.alternativeRequests)
+
+        findAlternatives()
+        assertEquals(SourceSelectionPhase.SEARCHING, app.sourceSelection.state.value.phase)
+        assertTrue(app.sourceSelection.cancel(app.sourceSelection.state.value.revision))
+        assertOriginalStopped()
+
+        app.alternativeResult = { AlternativeSources(it, emptyList()) }
+        findAlternatives()
+        looper.idle()
+        assertEquals(SourceSelectionPhase.FAILED, app.sourceSelection.state.value.phase)
+        assertOriginalStopped()
+
+        app.alternativeResult = { AlternativeSources(it, listOf(SourceCandidate(alternative, 1))) }
+        findAlternatives()
+        looper.idle()
+        assertEquals(SourceSelectionPhase.CHOOSING, app.sourceSelection.state.value.phase)
+        assertOriginalStopped()
+        assertTrue(app.sourceSelection.select(app.sourceSelection.state.value.revision, 0))
+
+        assertNull(session.sessionExtras.getString(failureKey))
+        assertEquals(alternative.key.stableId to 1L, (field("sources") as QueueSources).currentSource(ticket))
+        assertEquals(listOf(original, next), queueSnapshot.value.songs)
+        assertEquals(revision, queueSnapshot.value.revision)
+        assertEquals(0, player.currentMediaItemIndex)
+        assertEquals(9000L, player.currentPosition)
+        assertFalse(player.playWhenReady)
+    }
+
+    @Test fun lateForegroundRejectionAfterGateSubmissionStopsLoadAndRetainsQueue() {
+        val current = player.currentMediaItem
+        val position = player.currentPosition
+        MusxiPlaybackService::class.java.getDeclaredField("playbackWanted").apply { isAccessible = true }.setBoolean(service, true)
+        player.playWhenReady = true // Simulate raw play submitted by the completed gate; player isn't started yet.
+        assertFalse((field("foregroundGate") as ForegroundPlaybackGate).pending)
+        assertFalse(player.isPlaying)
+        call("onForegroundStartRejected", emptyArray())
+        assertEquals(PlaybackFailure.BACKGROUND_RESTRICTED, field("failure"))
+        assertEquals(false, field("playbackWanted"))
+        assertFalse(player.playWhenReady)
+        assertEquals(Player.STATE_IDLE, player.playbackState)
+        assertEquals(current, player.currentMediaItem)
+        assertEquals(position, player.currentPosition)
+        assertEquals(0, app.alternativeRequests)
+        val lateSource = PlaybackException("content://private", LocalAudioFailure(LocalAudioError.NOT_FOUND), PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND)
+        emit { it.onPlayerError(lateSource) }
+        assertEquals(PlaybackFailure.BACKGROUND_RESTRICTED, field("failure"))
+        assertNull(field("localFailure"))
+    }
+
+    @Test fun audioRouteLossClearsPendingPlayWithoutTreatingItAsASourceError() {
+        val original = player.currentMediaItem
+        MusxiPlaybackService::class.java.getDeclaredField("playbackWanted").apply { isAccessible = true }.setBoolean(service, true)
+        val gate = field("foregroundGate") as ForegroundPlaybackGate
+        gate.start { true }
+        assertTrue(gate.pending)
+        emit { it.onPlayWhenReadyChanged(false, Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY) }
+        assertFalse(gate.pending)
+        assertEquals(false, field("playbackWanted"))
+        assertEquals(original, player.currentMediaItem)
+        assertNull(field("failure"))
+        assertEquals(0, app.alternativeRequests)
+        call("onForegroundStartRejected", emptyArray())
+        assertNull(field("failure"))
+        assertEquals(PlaybackDiagnosticStage.BECOMING_NOISY, PlaybackDiagnostics.state.value.last().stage)
+    }
+
+    @Test fun decoderErrorIsDistinctFromFilePermissionFailure() {
+        val error = PlaybackException("Decoder failed", IllegalStateException("file:///private"), PlaybackException.ERROR_CODE_DECODER_INIT_FAILED)
+        emit { it.onPlayerError(error) }
+        val observation = PlaybackDiagnostics.state.value.last { it.stage == PlaybackDiagnosticStage.DECODE_FAILED }
+        assertEquals(PlaybackFailure.PROTOCOL, observation.failure)
+        assertEquals(PlaybackException.ERROR_CODE_DECODER_INIT_FAILED, observation.media3ErrorCode)
+        assertEquals(0, app.alternativeRequests)
+    }
+
+    @Test fun stalledLoadReleasesMediaWithoutSkippingOrLosingCuePosition() {
+        val cue = entry("分曲", 4000, LocalAudioSegment(20_000_000, 30_000_000, 1))
+        val segmented = LocalAudioPlaybackQueue(null, listOf(cue), 0, 4000)
+        assertEquals(0, apply(QueueCommandMailbox.Action.LocalReplace(segmented, false)))
+        val item = player.currentMediaItem
+        player.playWhenReady = true
+        call("playbackStalled", arrayOf(PlaybackStallWatch.Kind::class.java), PlaybackStallWatch.Kind.PREPARE)
+        assertEquals(PlaybackFailure.TIMEOUT, field("failure"))
+        assertEquals(Player.STATE_IDLE, player.playbackState)
+        assertEquals(item, player.currentMediaItem)
+        assertEquals(4000L, player.currentPosition)
+        assertFalse(player.playWhenReady)
+        assertEquals(0, app.alternativeRequests)
+        val observation = PlaybackDiagnostics.state.value.last { it.stage == PlaybackDiagnosticStage.PREPARE_TIMEOUT }
+        assertEquals(PlaybackDiagnosticMedia.CUE, observation.media)
+        assertEquals(PlaybackFailure.TIMEOUT, observation.failure)
     }
 
     @Test fun clearingLocalQueueCheckpointsAndRevokesOldSourceTickets() {
@@ -494,6 +631,8 @@ class LocalPlaybackTestApplication : Application(), PlaybackHost {
     var restoreCallback: ((Result<LocalAudioPlaybackQueue?>) -> Unit)? = null
     var acceptPreparedQueue = true
     var alternativeRequests = 0
+    var alternativeResult: ((SongSummary) -> AlternativeSources)? = null
+    var resolvePlatform: (String) -> StreamLease = { throw AssertionError("No platform IO expected") }
     var platformCheckpoints = 0
     var localTakeovers = 0
     var stopRequests = 0
@@ -509,7 +648,7 @@ class LocalPlaybackTestApplication : Application(), PlaybackHost {
     override val playbackSources = object : PlaybackSourceProvider {
         override val authorization = authorizationEvents
         override fun currentGeneration() = generation
-        override fun resolve(mediaId: String, generation: Long): StreamLease = throw AssertionError("No platform IO expected")
+        override fun resolve(mediaId: String, generation: Long): StreamLease = resolvePlatform(mediaId)
     }
     override val localAudioPlayback = object : LocalAudioPlaybackHost {
         override val changes = preferenceChanges
@@ -539,7 +678,9 @@ class LocalPlaybackTestApplication : Application(), PlaybackHost {
         override fun deactivateQueue(clear: Boolean) { deactivations += clear }
     }
     override fun findAlternativeSources(original: SongSummary, result: (Result<AlternativeSources>) -> Unit): Job {
-        alternativeRequests++; return Job().also { it.complete() }
+        alternativeRequests++
+        alternativeResult?.let { result(Result.success(it(original))) }
+        return Job().also { it.complete() }
     }
     override fun onLocalPlaybackRequested() { localTakeovers++ }
     override fun onPlaybackStopRequested() { stopRequests++ }

@@ -1,30 +1,29 @@
 package tech.musxi.player.ui.library
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.dp
+import tech.musxi.core.account.Platform
 import tech.musxi.player.ui.components.AnchoredMenu
 import tech.musxi.player.ui.components.MenuDivider
 import tech.musxi.player.ui.components.MenuHeader
 import tech.musxi.player.ui.components.MenuItem
+import tech.musxi.player.ui.components.MusxiConfirmDialog
+import tech.musxi.player.ui.components.MusxiTextFieldDialog
 import tech.musxi.player.ui.components.ProgressArc
 import tech.musxi.player.ui.theme.displayName
-import androidx.compose.ui.unit.dp
+import tech.musxi.player.ui.theme.identityColor
+import tech.musxi.player.ui.theme.isDarkSurface
 
 @Composable
 fun PlaylistManagementMenu(
@@ -58,49 +57,117 @@ fun PlaylistManagementMenu(
     }
 }
 
+/** Keeps the last shown naming UI across the exit animation so the card fades out cleanly. */
 @Composable
-fun PlaylistNameDialog(ui: PlaylistNameUi, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
-    var value by remember { mutableStateOf(TextFieldValue(ui.draft, TextRange(0, ui.draft.length))) }
-    val candidate = value.text.trim()
-    val problem = playlistNameProblem(candidate, ui.platform)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(ui.title) },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = value, onValueChange = { value = it }, enabled = !ui.submitting,
-                    singleLine = true, isError = value.text.isNotEmpty() && problem != null,
-                    supportingText = {
-                        Text(ui.error ?: if (value.text.isNotEmpty()) problem.orEmpty() else
-                            if (ui.platform == tech.musxi.core.account.Platform.QQ) "最多 20 个字符" else "最多 80 个字符")
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(candidate) }, enabled = !ui.submitting && problem == null) {
-                Text(if (ui.submitting) "正在提交…" else if (ui.target == null) "创建" else "保存")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !ui.submitting) { Text("取消") } },
-    )
+fun PlaylistNameDialogHost(ui: PlaylistNameUi?, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    val last = remember { arrayOfNulls<PlaylistNameUi>(1) }
+    if (ui != null) last[0] = ui
+    val shown = ui ?: last[0] ?: return
+    PlaylistNameDialogContent(ui = shown, visible = ui != null, onDismiss = onDismiss, onConfirm = onConfirm)
 }
 
 @Composable
-fun PlaylistDeleteDialog(ui: PlaylistDeleteUi, onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    val playlist = ui.target.playlist
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("删除${playlist.key.platform.displayName}歌单？") },
-        text = { Text("将删除整个“${playlist.title}”，包含其中 ${playlist.trackCount} 首歌曲的歌单关系。\n\n歌曲本身和其他歌单不会删除，已经开始播放的队列继续保留。此操作会修改平台账号中的歌单。") },
-        confirmButton = {
-            TextButton(onClick = onConfirm, enabled = !ui.submitting) {
-                Text(if (ui.submitting) "正在删除…" else "删除整个歌单",
-                    color = if (ui.submitting) androidx.compose.ui.graphics.Color.Unspecified else MaterialTheme.colorScheme.error)
+fun PlaylistNameDialog(
+    ui: PlaylistNameUi,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    PlaylistNameDialogContent(ui = ui, visible = true, onDismiss = onDismiss, onConfirm = onConfirm)
+}
+
+@Composable
+private fun PlaylistNameDialogContent(
+    ui: PlaylistNameUi,
+    visible: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    val dark = MaterialTheme.colorScheme.background.isDarkSurface()
+    val resetKey = remember(ui.title, ui.platform, ui.target?.playlist?.key, ui.initial) {
+        "${ui.title}:${ui.platform}:${ui.target?.playlist?.key?.stableId}:${ui.initial}"
+    }
+    var value by remember(resetKey) { mutableStateOf(TextFieldValue(ui.draft, TextRange(0, ui.draft.length))) }
+    var editedAfterError by remember(resetKey, ui.error) { mutableStateOf(false) }
+    val seenOpen = remember { booleanArrayOf(false) }
+    LaunchedEffect(visible) {
+        if (visible) {
+            if (seenOpen[0]) {
+                value = TextFieldValue(ui.draft, TextRange(0, ui.draft.length))
+                editedAfterError = false
             }
+            seenOpen[0] = true
+        }
+    }
+    val candidate = value.text.trim()
+    val problem = playlistNameProblem(candidate, ui.platform)
+    val remoteError = ui.error?.takeUnless { editedAfterError }
+    val shownError = remoteError ?: problem?.takeIf { value.text.isNotEmpty() }
+    val maxCount = if (ui.platform == Platform.QQ) 20 else 80
+    val currentCount = if (ui.platform == Platform.QQ) candidate.length else candidate.codePointCount(0, candidate.length)
+
+    MusxiTextFieldDialog(
+        visible = visible,
+        title = ui.title,
+        value = value,
+        onValueChange = {
+            if (it.text != value.text) editedAfterError = true
+            value = it
         },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !ui.submitting) { Text("取消") } },
+        confirmLabel = if (ui.target == null) "创建" else "保存",
+        onDismiss = onDismiss,
+        onConfirm = { onConfirm(candidate) },
+        confirmEnabled = problem == null,
+        placeholder = "输入歌单名称",
+        helperText = if (ui.target == null) "新建后将同步到${ui.platform.displayName}账号" else "修改将同步到${ui.platform.displayName}账号",
+        errorText = shownError,
+        counterText = "$currentCount / $maxCount",
+        busy = ui.submitting,
+        busyLabel = "正在提交…",
+        eyebrow = ui.platform.displayName,
+        eyebrowDot = ui.platform.identityColor(dark),
+    )
+}
+
+/** Keeps the last shown delete UI across the exit animation so the card fades out cleanly. */
+@Composable
+fun PlaylistDeleteDialogHost(ui: PlaylistDeleteUi?, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    val last = remember { arrayOfNulls<PlaylistDeleteUi>(1) }
+    if (ui != null) last[0] = ui
+    val shown = ui ?: last[0] ?: return
+    PlaylistDeleteDialogContent(ui = shown, visible = ui != null, onDismiss = onDismiss, onConfirm = onConfirm)
+}
+
+@Composable
+fun PlaylistDeleteDialog(
+    ui: PlaylistDeleteUi,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    PlaylistDeleteDialogContent(ui = ui, visible = true, onDismiss = onDismiss, onConfirm = onConfirm)
+}
+
+@Composable
+private fun PlaylistDeleteDialogContent(
+    ui: PlaylistDeleteUi,
+    visible: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val dark = MaterialTheme.colorScheme.background.isDarkSurface()
+    val playlist = ui.target.playlist
+    val platform = playlist.key.platform
+    MusxiConfirmDialog(
+        visible = visible,
+        title = "删除${platform.displayName}歌单？",
+        body = "将删除整个“${playlist.title}”，包含其中 ${playlist.trackCount} 首歌曲的歌单关系。",
+        note = "歌曲本身和其他歌单不会删除，已经开始播放的队列继续保留。此操作会修改平台账号中的歌单。",
+        confirmLabel = "删除整个歌单",
+        busyLabel = "正在删除…",
+        danger = true,
+        busy = ui.submitting,
+        eyebrow = "${platform.displayName} · 远端操作",
+        eyebrowDot = platform.identityColor(dark),
+        onDismiss = onDismiss,
+        onConfirm = onConfirm,
     )
 }

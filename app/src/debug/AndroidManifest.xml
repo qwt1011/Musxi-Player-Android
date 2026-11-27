@@ -13,6 +13,9 @@
         <activity android:name="tech.musxi.player.DeveloperActivity" android:exported="false" android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize" />
         <activity android:name="tech.musxi.player.ValidationFocusActivity" android:exported="false" />
+        <activity android:name="tech.musxi.player.AccountAuthorizationValidationActivity" android:exported="false"
+            android:taskAffinity="${applicationId}.accountvalidation" android:excludeFromRecents="true"
+            android:launchMode="singleTask" />
         <activity android:name="tech.musxi.player.LocalAudioPickerValidationActivity" android:exported="false" />
         <activity android:name="tech.musxi.player.QqWebLoginValidationActivity" android:exported="false" />
         <activity android:name="tech.musxi.player.KugouWebLoginValidationActivity" android:exported="false" />

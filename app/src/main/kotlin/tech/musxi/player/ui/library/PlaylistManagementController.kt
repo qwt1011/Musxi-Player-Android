@@ -130,9 +130,20 @@ class PlaylistManagementController(
                 onNotice(if (current.target == null) "已创建“$actual”" else "已改名，正在刷新歌单")
             }, onFailure = {
                 val category = category(it)
-                val message = if (category in uncertainResults) "结果未确认，请刷新核对" else playlistManagementError(category)
-                if (category in uncertainResults) actions.refresh(selected)
-                naming = naming?.copy(draft = name, submitting = false, error = message)
+                when {
+                    category in uncertainResults -> {
+                        naming = null
+                        actions.refresh(selected)
+                        onNotice("结果未确认，已刷新列表，请核对后再操作")
+                    }
+                    category in terminalNameErrors -> {
+                        naming = null
+                        onNotice(playlistManagementError(category))
+                    }
+                    else -> {
+                        naming = naming?.copy(draft = name, submitting = false, error = playlistManagementError(category))
+                    }
+                }
             })
         }
         current.target?.let { target -> actions.rename(target, name) { complete(it.map { target.playlist.title }) } }
@@ -161,21 +172,40 @@ class PlaylistManagementController(
                         actions.refresh(selected)
                         onNotice("结果未确认，请刷新核对")
                     }
+                    outcome.confirmedAbsent == false -> {
+                        deleting = null
+                        if (outcome.error in uncertainResults) actions.refresh(selected)
+                        val reason = if (outcome.error == "not_confirmed") "删除未生效" else playlistManagementError(outcome.error)
+                        onNotice("$reason，歌单仍在")
+                    }
                     else -> {
                         deleting = null
-                        val suffix = if (outcome.confirmedAbsent == false) "，歌单仍在" else ""
-                        onNotice(playlistManagementError(outcome.error) + suffix)
+                        val cat = outcome.error
+                        if (cat != "account_changed") actions.refresh(selected)
+                        val message = if (cat == null || cat in uncertainResults) {
+                            "未能确认是否已删除，已刷新列表，请核对"
+                        } else {
+                            "${playlistManagementError(cat)}，未能确认是否已删除，请刷新核对"
+                        }
+                        onNotice(message)
                     }
                 }
             }, onFailure = {
                 deleting = null
-                onNotice(playlistManagementError(category(it)))
+                val cat = category(it)
+                if (cat in uncertainResults) {
+                    actions.refresh(selected)
+                    onNotice("未能确认是否已删除，已刷新列表，请核对")
+                } else {
+                    onNotice(playlistManagementError(cat))
+                }
             })
         }
     }
 }
 
-private val uncertainResults = setOf("network", "timeout", "not_confirmed", "unknown", "unavailable", "incomplete", "protocol")
+private val uncertainResults = setOf("network", "timeout", "http", "not_confirmed", "unknown", "unavailable", "incomplete", "protocol")
+private val terminalNameErrors = setOf("permission", "unsupported", "account_changed", "account_unverified", "account_unavailable")
 private fun category(error: Throwable): String = (error as? LibraryPageFailure)?.category ?: "unavailable"
 
 fun playlistNameProblem(name: String, platform: Platform): String? = when {
@@ -199,5 +229,6 @@ fun playlistManagementError(category: String?): String = when (category) {
     "rate", "limit" -> "操作过于频繁，请稍后再试"
     "invalid_request", "request" -> "歌单信息或名称不符合要求，请重新读取"
     "network", "timeout", "http" -> "网络异常，请检查连接后刷新核对"
+    "not_confirmed" -> "结果未确认，请刷新核对"
     else -> "操作未完成，请稍后重试"
 }

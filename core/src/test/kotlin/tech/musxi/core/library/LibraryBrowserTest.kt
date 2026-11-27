@@ -360,15 +360,20 @@ class LibraryBrowserTest {
         val old = f.playlistCalls.single()
         f.browser.tracks(playlist, 50); f.flush()
         val artists = mutableListOf("Artist")
-        val songs = mutableListOf(SongSummary(MediaKey(Platform.NETEASE, "1"), "Song", artists, "Album", 1000))
+        val artistIds = mutableListOf("artist-1")
+        val songs = mutableListOf(SongSummary(MediaKey(Platform.NETEASE, "1"), "Song", artists, "Album", 1000,
+            artistIds = artistIds))
         f.trackCalls.single()(Result.success(Page(songs, 100, 101)))
-        artists.clear(); songs.clear(); f.flush()
+        artists.clear(); artistIds.clear(); songs.clear(); f.flush()
         old(Result.success(fresh)); f.flush()
         val state = f.browser.state.value
         val page = (state.content as LibraryContent.Tracks).page
         assertEquals(50, state.query.offset); assertEquals(100, page.nextOffset); assertEquals(101, page.total)
         assertEquals(listOf("Artist"), page.items.single().artists)
+        assertEquals(listOf("artist-1"), page.items.single().artistIds)
         try { (page.items as MutableList).clear(); fail("must be immutable") } catch (_: UnsupportedOperationException) { }
+        try { (page.items.single().artistIds as MutableList).clear(); fail("artist IDs must be immutable") }
+        catch (_: UnsupportedOperationException) { }
     }
     @Test fun kugouShortPageContinuationAndFailedRefreshPreserveMetadata() {
         val f = Fixture(Platform.KUGOU)

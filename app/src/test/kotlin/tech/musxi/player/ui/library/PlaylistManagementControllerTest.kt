@@ -78,18 +78,46 @@ class PlaylistManagementControllerTest {
         assertNull(fixture.controller.naming)
     }
 
-    @Test fun unconfirmedRenameKeepsTheTextAndRefreshesWithoutRetry() {
+    @Test fun unconfirmedRenameClosesDialogAndRefreshesWithoutRetry() {
         val fixture = Fixture()
         fixture.controller.openMenu(summary)
         fixture.info!!(Result.success(info))
         fixture.controller.openRename()
         fixture.controller.submitName("新名字")
         fixture.renamed!!(Result.failure(LibraryPageFailure("not_confirmed")))
-        assertEquals("新名字", fixture.controller.naming!!.draft)
-        assertFalse(fixture.controller.naming!!.submitting)
-        assertEquals("结果未确认，请刷新核对", fixture.controller.naming!!.error)
+        assertNull(fixture.controller.naming)
+        assertEquals("结果未确认，已刷新列表，请核对后再操作", fixture.notices.single())
         assertEquals(1, fixture.renameCount)
         assertEquals(listOf(Platform.NETEASE), fixture.refreshes)
+    }
+
+    @Test fun unconfirmedCreateClosesDialogAndRefreshesToPreventDuplicate() {
+        val fixture = Fixture()
+        fixture.controller.openCreate()
+        fixture.controller.submitName("可能已建好的歌单")
+        fixture.created!!(Result.failure(LibraryPageFailure("timeout")))
+        assertNull(fixture.controller.naming)
+        assertEquals("结果未确认，已刷新列表，请核对后再操作", fixture.notices.single())
+        assertEquals(listOf(Platform.NETEASE), fixture.refreshes)
+        // Re-submitting after dialog closed does nothing.
+        fixture.controller.submitName("可能已建好的歌单")
+        assertEquals(1, fixture.createCount)
+    }
+
+    @Test fun definiteNameFailureKeepsDraftForCorrectionWhilePermissionClosesDialog() {
+        val fixture = Fixture()
+        fixture.controller.openCreate()
+        fixture.controller.submitName("限流歌单")
+        fixture.created!!(Result.failure(LibraryPageFailure("rate")))
+        assertEquals("限流歌单", fixture.controller.naming!!.draft)
+        assertFalse(fixture.controller.naming!!.submitting)
+        assertEquals("操作过于频繁，请稍后再试", fixture.controller.naming!!.error)
+        assertTrue(fixture.refreshes.isEmpty())
+
+        fixture.controller.submitName("限流歌单")
+        fixture.created!!(Result.failure(LibraryPageFailure("permission")))
+        assertNull(fixture.controller.naming)
+        assertEquals("当前账号没有此歌单的操作权限", fixture.notices.single())
     }
 
     @Test fun unknownDeleteDoesNotRemoveTheOpenPlaylistOrRetry() {
@@ -102,6 +130,76 @@ class PlaylistManagementControllerTest {
         assertTrue(fixture.deleted.isEmpty())
         assertEquals("结果未确认，请刷新核对", fixture.notices.single())
         assertEquals(1, fixture.deleteCount)
+    }
+
+    @Test fun failedDeleteDistinguishesConfirmedPresentFromUnverifiedAbsence() {
+        val present = Fixture()
+        present.controller.openMenu(summary)
+        present.info!!(Result.success(info))
+        present.controller.openDelete()
+        present.controller.confirmDelete()
+        present.deleting!!(Result.success(PlaylistDeletionResult(summary.key, PlaylistChangeStatus.FAILED, false, "not_confirmed")))
+        assertNull(present.controller.deleting)
+        assertTrue(present.deleted.isEmpty())
+        assertEquals("删除未生效，歌单仍在", present.notices.single())
+        assertEquals(listOf(Platform.NETEASE), present.refreshes)
+
+        val unverified = Fixture()
+        unverified.controller.openMenu(summary)
+        unverified.info!!(Result.success(info))
+        unverified.controller.openDelete()
+        unverified.controller.confirmDelete()
+        unverified.deleting!!(Result.success(PlaylistDeletionResult(summary.key, PlaylistChangeStatus.FAILED, null, "network")))
+        assertNull(unverified.controller.deleting)
+        assertTrue(unverified.deleted.isEmpty())
+        assertEquals("未能确认是否已删除，已刷新列表，请核对", unverified.notices.single())
+        assertEquals(listOf(Platform.NETEASE), unverified.refreshes)
+
+        val unverifiedPerm = Fixture()
+        unverifiedPerm.controller.openMenu(summary)
+        unverifiedPerm.info!!(Result.success(info))
+        unverifiedPerm.controller.openDelete()
+        unverifiedPerm.controller.confirmDelete()
+        unverifiedPerm.deleting!!(Result.success(PlaylistDeletionResult(summary.key, PlaylistChangeStatus.FAILED, null, "permission")))
+        assertNull(unverifiedPerm.controller.deleting)
+        assertTrue(unverifiedPerm.deleted.isEmpty())
+        assertEquals("当前账号没有此歌单的操作权限，未能确认是否已删除，请刷新核对", unverifiedPerm.notices.single())
+        assertEquals(listOf(Platform.NETEASE), unverifiedPerm.refreshes)
+    }
+
+    @Test fun unchangedConfirmedAbsentCompletesAsAlreadyMissing() {
+        val fixture = Fixture()
+        fixture.controller.openMenu(summary)
+        fixture.info!!(Result.success(info))
+        fixture.controller.openDelete()
+        fixture.controller.confirmDelete()
+        fixture.deleting!!(Result.success(PlaylistDeletionResult(summary.key, PlaylistChangeStatus.UNCHANGED, true)))
+        assertNull(fixture.controller.deleting)
+        assertEquals(listOf(summary.key), fixture.deleted)
+        assertEquals("歌单已不存在，列表已刷新", fixture.notices.single())
+    }
+
+    @Test fun outerDeleteFailureHandlesUncertainAndDefiniteErrors() {
+        val uncertain = Fixture()
+        uncertain.controller.openMenu(summary)
+        uncertain.info!!(Result.success(info))
+        uncertain.controller.openDelete()
+        uncertain.controller.confirmDelete()
+        uncertain.deleting!!(Result.failure(LibraryPageFailure("http")))
+        assertNull(uncertain.controller.deleting)
+        assertTrue(uncertain.deleted.isEmpty())
+        assertEquals("未能确认是否已删除，已刷新列表，请核对", uncertain.notices.single())
+        assertEquals(listOf(Platform.NETEASE), uncertain.refreshes)
+
+        val busy = Fixture()
+        busy.controller.openMenu(summary)
+        busy.info!!(Result.success(info))
+        busy.controller.openDelete()
+        busy.controller.confirmDelete()
+        busy.deleting!!(Result.failure(LibraryPageFailure("busy")))
+        assertNull(busy.controller.deleting)
+        assertEquals("该平台有操作进行中，请稍后再试", busy.notices.single())
+        assertTrue(busy.refreshes.isEmpty())
     }
 
     @Test fun onlyConfirmedAbsenceCompletesDeletion() {

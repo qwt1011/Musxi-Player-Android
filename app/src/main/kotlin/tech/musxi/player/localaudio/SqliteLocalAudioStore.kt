@@ -35,6 +35,7 @@ import tech.musxi.core.localaudio.LocalAudioSortResult
 import tech.musxi.core.localaudio.LocalAudioSource
 import tech.musxi.core.localaudio.LocalAudioStore
 import tech.musxi.core.localaudio.LocalCueImportTrack
+import tech.musxi.core.localaudio.LocalAudioVersionToken
 import tech.musxi.core.localaudio.LocalImportMode
 import tech.musxi.core.localaudio.LocalMediaKind
 import tech.musxi.core.localaudio.StoredLocalAudioDirectory
@@ -72,17 +73,22 @@ class SqliteLocalAudioStore(
 
         override fun onCreate(db: SQLiteDatabase) {
             SCHEMA.forEach { db.execSQL(it) }
-            db.insertOrThrow("meta", null, ContentValues().apply {
-                put("key", REVISION_KEY)
-                put("value", "0")
-            })
+            db.execSQL("ALTER TABLE directories ADD COLUMN last_refresh_failures INTEGER NOT NULL DEFAULT 0")
+            for (key in listOf(REVISION_KEY, ORGANIZATION_REVISION_KEY, PROGRESS_REVISION_KEY)) {
+                db.insertOrThrow("meta", null, ContentValues().apply {
+                    put("key", key)
+                    put("value", "0")
+                })
+            }
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
             // Version 1 is the initial schema, version 2 adds directory associations plus the
             // stored modification time, version 3 adds the media kind and the artwork key, and
             // version 4 adds the per-audio playback speed and the user's own cover. Version 5
-            // adds an optional CUE slice without changing existing whole-file rows.
+            // adds an optional CUE slice without changing existing whole-file rows. Version 6
+            // splits organization and progress epochs while preserving the legacy counter.
+            // Version 7 adds the per-file failure count from the last complete directory scan.
             // Every statement is additive, so an upgraded library keeps all existing rows; the
             // steps always run in order, so a version-1 library reaches the current schema too.
             // Any other on-disk version must fail loudly instead of serving a library this build
@@ -94,12 +100,23 @@ class SqliteLocalAudioStore(
             if (oldVersion < 3) MIGRATION_3.forEach { db.execSQL(it) }
             if (oldVersion < 4) MIGRATION_4.forEach { db.execSQL(it) }
             if (oldVersion < 5) MIGRATION_5.forEach { db.execSQL(it) }
+            if (oldVersion < 7) db.execSQL("ALTER TABLE directories ADD COLUMN last_refresh_failures INTEGER NOT NULL DEFAULT 0")
+            if (oldVersion < 6) {
+                // Seed both epochs from the old counter, never reset an existing library.
+                val seed = currentRevision(db, LocalAudioError.STORAGE_FAILED)
+                for (key in listOf(ORGANIZATION_REVISION_KEY, PROGRESS_REVISION_KEY)) {
+                    db.insertOrThrow("meta", null, ContentValues().apply {
+                        put("key", key); put("value", seed.toString())
+                    })
+                }
+            }
         }
     }
 
-    /** A single write transaction. [changed] decides whether the library revision advances. */
+    /** A transaction advances organization and/or progress epochs, plus the legacy counter. */
     private inner class Tx(val db: SQLiteDatabase) {
         var changed = false
+        var progressChanged = false
 
         fun requireFolder(id: String) {
             validateId(id, LocalAudioError.NOT_FOUND)
@@ -130,6 +147,8 @@ class SqliteLocalAudioStore(
         LocalAudioLibraryState(
             ready = true,
             revision = currentRevision(db, error),
+            organizationRevision = currentRevision(db, error, ORGANIZATION_REVISION_KEY),
+            progressRevision = currentRevision(db, error, PROGRESS_REVISION_KEY),
             folders = db.rawQuery(
                 "SELECT id, name, continue_playback FROM folders ORDER BY created_at_ms, rowid",
                 null,
@@ -608,7 +627,9 @@ class SqliteLocalAudioStore(
             }
         } }
         return LocalAudioLibraryState(ready = true, revision = currentRevision(db, LocalAudioError.STORAGE_FAILED),
-            folders = listOf(folder), items = items, members = members, progress = progress)
+            folders = listOf(folder), items = items, members = members, progress = progress,
+            organizationRevision = currentRevision(db, LocalAudioError.STORAGE_FAILED, ORGANIZATION_REVISION_KEY),
+            progressRevision = currentRevision(db, LocalAudioError.STORAGE_FAILED, PROGRESS_REVISION_KEY))
     }
 
     /** IDs not yet filed in [folderId], in the caller's order. */
@@ -783,7 +804,7 @@ class SqliteLocalAudioStore(
                     }
                 }
             }
-            changed = true
+            progressChanged = true
         }
     }
 
@@ -870,6 +891,9 @@ class SqliteLocalAudioStore(
                 unmatchedItems = backup.items.size - matched.size,
                 folders = backup.folders.size,
                 bookmarks = backup.bookmarks.count { it.audioId in matched },
+                expectedVersion = LocalAudioVersionToken(
+                    currentRevision(db, LocalAudioError.READ_FAILED, ORGANIZATION_REVISION_KEY),
+                    currentRevision(db, LocalAudioError.READ_FAILED, PROGRESS_REVISION_KEY)),
             )
         }
     }
@@ -952,7 +976,7 @@ class SqliteLocalAudioStore(
                     put("completed", if (value.completed) 1 else 0)
                     put("updated_at_ms", value.updatedAtMs)
                 })
-                changed = true
+                progressChanged = true
             }
 
             val existingBookmarks = mutableSetOf<String>()
@@ -995,7 +1019,7 @@ class SqliteLocalAudioStore(
                     put("folder_id", cursor.folderId)
                     put("audio_id", audioId)
                 }, SQLiteDatabase.CONFLICT_IGNORE)
-                if (row != -1L) changed = true
+                if (row != -1L) progressChanged = true
             }
 
             checkCancelled()
@@ -1156,6 +1180,50 @@ class SqliteLocalAudioStore(
         missing
     }
 
+    // The outer transaction protects validation even against another helper for the same file.
+    // Android nests the existing mutation transaction on this connection; only the inner Tx
+    // advances counters, and a failure at either level rolls the entire operation back.
+    private fun <T> withVersion(token: LocalAudioVersionToken, needsProgress: Boolean = false,
+        action: (Long) -> T): T = write {
+        if (needsProgress && token.progressRevision == null) throw LocalAudioFailure(LocalAudioError.INVALID_TARGET)
+        if (token.organizationRevision != currentRevision(db, LocalAudioError.STORAGE_FAILED, ORGANIZATION_REVISION_KEY) ||
+            (token.progressRevision != null && token.progressRevision != currentRevision(db, LocalAudioError.STORAGE_FAILED, PROGRESS_REVISION_KEY))) {
+            throw LocalAudioFailure(LocalAudioError.STALE_STATE)
+        }
+        action(currentRevision(db, LocalAudioError.STORAGE_FAILED))
+    }
+
+    override fun importCue(folderId: String, tracks: List<LocalCueImportTrack>, expectedVersion: LocalAudioVersionToken,
+        checkCancelled: () -> Unit): List<LocalAudioItem> = withVersion(expectedVersion) {
+        importCue(folderId, tracks, it, checkCancelled)
+    }
+    override fun organize(audioIds: List<String>, action: LocalAudioBatchAction, folderId: String,
+        destinationFolderId: String?, expectedVersion: LocalAudioVersionToken,
+        checkCancelled: () -> Unit): LocalAudioBatchResult = withVersion(expectedVersion) {
+        organize(audioIds, action, folderId, destinationFolderId, it, checkCancelled)
+    }
+    override fun sortFolder(folderId: String, sort: LocalAudioSort, descending: Boolean,
+        expectedVersion: LocalAudioVersionToken, checkCancelled: () -> Unit): LocalAudioSortResult =
+        withVersion(expectedVersion, sort == LocalAudioSort.LAST_PROGRESS) {
+            sortFolder(folderId, sort, descending, it, checkCancelled)
+        }
+    override fun reorder(folderId: String, audioIds: List<String>, expectedVersion: LocalAudioVersionToken) =
+        withVersion(expectedVersion) { reorder(folderId, audioIds) }
+    override fun restoreOrganization(backup: LocalAudioBackup, expectedVersion: LocalAudioVersionToken,
+        checkCancelled: () -> Unit): LocalAudioRestoreResult = withVersion(expectedVersion, needsProgress = true) {
+        restoreOrganization(backup, it, checkCancelled)
+    }
+
+    override fun finishDirectoryRefresh(directoryId: String, seenIdentities: Set<String>, refreshedAtMs: Long,
+        failedItems: Int): Int = write {
+        if (failedItems !in 0..LocalAudioLimits.MAX_BATCH) throw LocalAudioFailure(LocalAudioError.INVALID_TARGET)
+        val missing = finishDirectoryRefresh(directoryId, seenIdentities, refreshedAtMs, error = null)
+        db.update("directories", ContentValues().apply { put("last_refresh_failures", failedItems) },
+            "id = ?", arrayOf(directoryId))
+        // The nested finish transaction already advances the organization counter.
+        missing
+    }
+
     override fun close() {
         synchronized(lock) { helper.close() }
     }
@@ -1173,7 +1241,9 @@ class SqliteLocalAudioStore(
         try {
             val tx = Tx(db)
             val value = tx.block()
-            if (tx.changed) bumpRevision(db)
+            if (tx.changed || tx.progressChanged) bumpRevision(db, REVISION_KEY)
+            if (tx.changed) bumpRevision(db, ORGANIZATION_REVISION_KEY)
+            if (tx.progressChanged) bumpRevision(db, PROGRESS_REVISION_KEY)
             db.setTransactionSuccessful()
             value
         } catch (e: Throwable) {
@@ -1231,11 +1301,12 @@ class SqliteLocalAudioStore(
         }
     }
 
-    private fun bumpRevision(db: SQLiteDatabase) {
-        val current = currentRevision(db, LocalAudioError.STORAGE_FAILED)
-        val next = if (current == Long.MAX_VALUE) 1L else current + 1
+    private fun bumpRevision(db: SQLiteDatabase, key: String) {
+        val current = currentRevision(db, LocalAudioError.STORAGE_FAILED, key)
+        if (current == Long.MAX_VALUE) throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
+        val next = current + 1
         val row = db.insertWithOnConflict("meta", null, ContentValues().apply {
-            put("key", REVISION_KEY)
+            put("key", key)
             put("value", next.toString())
         }, SQLiteDatabase.CONFLICT_REPLACE)
         if (row == -1L) throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
@@ -1245,8 +1316,8 @@ class SqliteLocalAudioStore(
      * The revision is the caller's staleness token, so a missing, non-numeric or negative value is
      * a damaged library, not revision zero.
      */
-    private fun currentRevision(db: SQLiteDatabase, error: LocalAudioError): Long {
-        val raw = db.rawQuery("SELECT value FROM meta WHERE key = ?", arrayOf(REVISION_KEY)).use { c ->
+    private fun currentRevision(db: SQLiteDatabase, error: LocalAudioError, key: String = REVISION_KEY): Long {
+        val raw = db.rawQuery("SELECT value FROM meta WHERE key = ?", arrayOf(key)).use { c ->
             if (c.moveToFirst()) c.getString(0) else null
         }
         return raw?.toLongOrNull()?.takeIf { it >= 0 } ?: throw LocalAudioFailure(error)
@@ -1408,6 +1479,7 @@ class SqliteLocalAudioStore(
         lastRefreshedAtMs = longOrNull(c, "last_refreshed_at_ms"),
         missingCount = c.getInt(c.getColumnIndexOrThrow("missing_count")),
         error = stringOrNull(c, "error")?.let(LocalAudioError::valueOf),
+        lastRefreshFailures = c.getInt(c.getColumnIndexOrThrow("last_refresh_failures")),
     )
 
     /** The audio ID a document was last imported as, or null when this directory never saw it. */
@@ -1536,14 +1608,16 @@ class SqliteLocalAudioStore(
 
     companion object {
         const val DB_NAME = "local-audio-v1.db"
-        private const val SCHEMA_VERSION = 5
+        private const val SCHEMA_VERSION = 7
         private const val REVISION_KEY = "revision"
+        private const val ORGANIZATION_REVISION_KEY = "organization_revision"
+        private const val PROGRESS_REVISION_KEY = "progress_revision"
         private const val AUDIO_COLUMNS =
             "id, mode, identity, location, grant_uri, file_name, title, creator, duration_ms, size_bytes, modified_at_ms, " +
                 "display_name, availability, added_at_ms, kind, artwork_key, playback_speed, custom_artwork_key, " +
                 "segment_start_us, segment_end_us, segment_track_number"
         private const val DIRECTORY_COLUMNS =
-            "id, folder_id, name, mode, recursive, last_refreshed_at_ms, missing_count, error, created_at_ms"
+            "id, folder_id, name, mode, recursive, last_refreshed_at_ms, missing_count, error, last_refresh_failures, created_at_ms"
 
         private const val FOLDERS_TABLE =
             "CREATE TABLE folders (" +

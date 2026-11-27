@@ -141,7 +141,7 @@ class PlaylistCatalogTest {
         assertEquals(listOf("3"), ids(f))
     }
 
-    @Test fun explicitCacheCleanupAndInvalidationDiscardAnyReopenDisplaySnapshot() {
+    @Test fun explicitCacheCleanupAndOpenCatalogInvalidationDiscardAnyReopenDisplaySnapshot() {
         for (invalidate in listOf(false, true)) {
             val f = Fixture()
             f.open(page(listOf(liked("9"), row("1")), null))
@@ -149,6 +149,66 @@ class PlaylistCatalogTest {
             assertTrue(f.catalog.state.value.items.isNotEmpty())
             if (invalidate) f.catalog.invalidate(ownerA) else f.catalog.clearCachedPages()
             assertTrue("explicit invalidation=$invalidate must clear visible rows", f.catalog.state.value.items.isEmpty())
+        }
+    }
+
+    @Test fun closedCatalogInvalidationKeepsDisplayUntilFreshPrefixWithoutAuthorizingPagingOrOrdering() {
+        for (platform in Platform.entries) {
+            val f = Fixture(platform)
+            fun rows(vararg ids: String) = ids.map { row(it).copy(key = MediaKey(platform, it)) }
+            val original = rows("1", "2", "3")
+            f.open(page(original.take(2), 2))
+            f.more(page(original.drop(2), null))
+            f.catalog.cancel()
+            val observed = mutableListOf<PlaylistCatalogState>()
+            val scope = CoroutineScope(Dispatchers.Unconfined)
+            scope.launch { f.catalog.state.collect { observed += it } }
+            try {
+                repeat(2) { f.catalog.invalidate(ownerA) }
+                assertEquals(original, f.catalog.state.value.items)
+                assertFalse(f.catalog.state.value.complete)
+                assertFalse(f.catalog.state.value.loading)
+                assertNull(f.catalog.state.value.nextOffset)
+                f.catalog.loadMore()
+                var moved: Result<Unit>? = null
+                f.catalog.moveToStart(MediaKey(platform, "2"), f.catalog.state.value.revision) { moved = it }
+                assertEquals("invalid_request", failure(requireNotNull(moved)))
+                assertEquals(0, f.orders.writeAttempts)
+                assertEquals(listOf(0, 2), f.playlistRequests)
+
+                f.catalog.open()
+                f.sync() // Stale disk prefix must not replace the full display snapshot.
+                assertTrue(f.catalog.state.value.loading)
+                assertTrue("$platform published a blank catalog: $observed", observed.all { it.items == original })
+                f.fail("network")
+                assertEquals(original, f.catalog.state.value.items)
+                assertEquals("network", f.catalog.state.value.error)
+                assertFalse(f.catalog.state.value.complete)
+                f.catalog.open()
+                f.sync()
+                val fresh = rows("4")
+                f.respond(page(fresh, null))
+                assertEquals(fresh, f.catalog.state.value.items)
+                assertTrue(f.catalog.state.value.complete)
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun closedInvalidationSnapshotIsClearedByCacheCleanupAndCannotCrossAccounts() {
+        for (switchAccount in listOf(false, true)) {
+            val f = Fixture()
+            f.open(page(listOf(row("1")), null))
+            f.catalog.cancel()
+            f.catalog.invalidate(ownerA)
+            assertEquals(listOf("1"), ids(f))
+            if (switchAccount) {
+                // Invalidation can precede the account collector's notification.
+                f.identity = ownerB
+                f.catalog.invalidate(ownerB)
+            } else f.catalog.clearCachedPages()
+            assertTrue(f.catalog.state.value.items.isEmpty())
+            f.catalog.open()
+            assertTrue(f.catalog.state.value.items.isEmpty())
         }
     }
 

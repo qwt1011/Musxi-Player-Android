@@ -101,6 +101,7 @@ data class LocalAudioRestorePreview(
     val unmatchedItems: Int,
     val folders: Int,
     val bookmarks: Int,
+    val expectedVersion: LocalAudioVersionToken? = null,
 )
 
 data class LocalAudioRestoreResult(

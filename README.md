@@ -16,7 +16,7 @@
 
 <p align="center">
   <a href="https://github.com/qwt1011/Musxi-Player-Android/releases/latest">下载安装包</a> ·
-  <a href="docs/android-v0.3-release.md">v0.3 更新说明</a> ·
+  <a href="docs/android-v0.3.1-release.md">v0.3.1 更新说明</a> ·
   <a href="docs/README.md">开发文档</a> ·
   <a href="https://github.com/qwt1011/Musxi-Player-Android/issues">反馈问题</a>
 </p>
@@ -26,6 +26,15 @@
 Musxi Player 的原生安卓版本，基于 [Miloscovo/Musxi-Player](https://github.com/Miloscovo/Musxi-Player) 持续开发。网易云音乐、QQ 音乐、酷狗与本地音频共用播放服务，在曲库、歌词和队列之间保持连贯的使用体验。
 
 项目坚持“小而精”：平台请求在手机本地完成，无配套业务服务器；优先使用 Android 系统能力和现有播放器。平台音乐按账号、网络和版权条件播放，不下载或缓存平台音频；用户主动导入的本地副本独立保存。
+
+## v0.3.1 的进展
+
+- **登录与播放更稳定**：适配网易云取流，改善三平台登录恢复、重新授权、取消和资源重新获取；修复 QQ 授权回桌面，完善酷狗授权返回。
+- **长歌单与队列**：分页补全检查顺序，目录重开保留展示，恢复队列保持暂停；搜索与歌词匹配增加旧请求保护。
+- **本地音频**：启用 DSF 的 DSD64／128／256 到 PCM 播放，完善本地库升级、目录刷新和整理一致性。
+- **界面统一**：歌单与本地音频对话框沿用 Musxi 浮层，网易云网页登录跟随主题；新增锁屏歌词页和设置入口。
+
+功能与实机覆盖范围见 [v0.3.1 说明](docs/android-v0.3.1-release.md)。CUE 分曲、检索筛选与导出备份已有后端进展，部分正式入口仍待接入。
 
 ## 可以做什么
 
@@ -66,13 +75,13 @@ Musxi Player 的原生安卓版本，基于 [Miloscovo/Musxi-Player](https://git
 
 ## 下载与安装
 
-当前正式版本为 [Android v0.3](https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.3.0)，应用版本 **0.3.0／versionCode 6**。支持 Android 8.0 / API 26 及以上。
+当前版本为 [Android v0.3.1](https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.3.1)，应用版本 **0.3.1／versionCode 7**。支持 Android 8.0 / API 26 及以上。
 
-在 [GitHub Releases](https://github.com/qwt1011/Musxi-Player-Android/releases/latest) 下载 `Musxi-Player-0.3.0.apk`，并取得 `SHA256SUMS.txt` 和应用内更新清单。沿用 v0.2 的正式包名 `tech.musxi.player` 与长期签名，可覆盖更新并保留应用数据。
+在 [GitHub Releases](https://github.com/qwt1011/Musxi-Player-Android/releases/latest) 下载 `Musxi-Player-0.3.1.apk`，并取得 `SHA256SUMS.txt` 和应用内更新清单。沿用 v0.2／v0.3.0 的正式包名 `tech.musxi.player` 与长期签名，可覆盖更新并保留应用数据。
 
-开发包 `tech.musxi.player.dev` 与正式包可并存，账号、设置及队列独立保存，不能用正式包自动迁移开发包数据。具体变化及验证边界见 [v0.3 发布说明](docs/android-v0.3-release.md)。
+开发包 `tech.musxi.player.dev` 与正式包可并存，账号、设置及队列独立保存，不能用正式包自动迁移开发包数据。具体变化及验证边界见 [v0.3.1 发布说明](docs/android-v0.3.1-release.md)。
 
-当前开发源码已启用本地 DSF 的 DSD64／128／256 到 PCM 播放，补齐正常启动、复制／引用与重启实机验收，见 [启用记录](docs/backend-dsf-enablement-20261117.md)。GitHub v0.3 安装包不包含本轮改动；本轮尚未生成新的正式签名包。其他 Android 版本、数小时后台／深度休眠、来电与更多音频设备继续按需验证；完整状态见 [能力状态](docs/feature-status.md)。
+本版包含本地 DSF 的 DSD64／128／256 到 PCM 播放，开发包已补正常启动、复制／引用与重启实机验收，见 [启用记录](docs/backend-dsf-enablement-20261117.md)。不提供原生 DSD 或 USB 独占输出；其他 Android 版本、数小时后台／深度休眠、来电与更多音频设备继续按需验证；完整状态见 [能力状态](docs/feature-status.md)。
 
 ## 构建与开发
 
@@ -98,6 +107,8 @@ pwsh -NoProfile -File build.ps1 -Install
 继续开发从 [当前接续](docs/next-session-handoff.md)、[能力状态](docs/feature-status.md) 和 [前端接口](docs/frontend-contract.md) 开始；工作规则见 [AGENTS.md](AGENTS.md)。临时材料与验收包放项目 `.local/`，不提交。
 
 ## 反馈与许可
+
+Musxi Player Android 是个人学习与研究用途的非官方开源项目，与网易云音乐、QQ 音乐、酷狗音乐及其运营方没有隶属或合作关系，也不代表获得其官方播放授权或背书。项目本身不提供平台曲库或音频资源；在线播放取决于平台的版权、账号权益和服务可用性。平台商标与音乐内容归各自权利人所有。
 
 欢迎在 [议题](https://github.com/qwt1011/Musxi-Player-Android/issues) 反馈，附应用版本、手机型号、系统版本、操作步骤和实际现象；请先遮住账号、验证码及私人内容。
 

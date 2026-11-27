@@ -88,9 +88,13 @@ class PlaylistCatalog(
     }
     fun invalidate(expected: LibraryCacheIdentity) {
         if (expected != identity()) return
-        reopeningItems = null
+        ensureOwner()
+        reopeningItems = if (!opened) state.value.items.takeIf { it.isNotEmpty() } else null
         pages.clear(); ++version; publish()
         browser.invalidate(expected, refreshNow = false)
+        // The page chain was already discarded above. Keep only the closed catalog's
+        // display snapshot when the next open observes this invalidation revision.
+        if (!opened) invalidation = browser.state.value.invalidationRevision
         if (opened) {
             browser.playlists(0)
             accept(browser.state.value)

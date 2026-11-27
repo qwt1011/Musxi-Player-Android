@@ -18,4 +18,5 @@ data class LocalAudioSourceCheckState(
     val completed: Boolean = false,
     val cancelled: Boolean = false,
     val error: LocalAudioError? = null,
+    val runId: Long = 0,
 )

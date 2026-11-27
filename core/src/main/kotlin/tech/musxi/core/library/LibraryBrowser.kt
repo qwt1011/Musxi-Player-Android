@@ -351,7 +351,8 @@ class LibraryBrowser(
 
     private fun copyPlaylists(page: Page<PlaylistSummary>) = page.copy(items = Collections.unmodifiableList(page.items.toList()))
     private fun copyTracks(page: Page<SongSummary>) = page.copy(items = Collections.unmodifiableList(page.items.map {
-        it.copy(artists = Collections.unmodifiableList(it.artists.toList()))
+        it.copy(artists = Collections.unmodifiableList(it.artists.toList()),
+            artistIds = Collections.unmodifiableList(it.artistIds.toList()))
     }))
 
     companion object {

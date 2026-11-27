@@ -60,6 +60,7 @@ class AppLocalAudioRepository internal constructor(
     private val importing = MutableStateFlow(LocalAudioImportState())
     val imports = importing.asStateFlow()
     private var importJob: Job? = null
+    private var importRunId = 0L
     private var transferJob: Job? = null
     private val transferring = MutableStateFlow(LocalAudioTransferState())
     val transfers = transferring.asStateFlow()
@@ -69,6 +70,7 @@ class AppLocalAudioRepository internal constructor(
     val searchState = searching.asStateFlow()
     private val sourceProbe = LocalAudioSourceProbe(files, documents)
     private var sourceCheckJob: Job? = null
+    private var sourceCheckRunId = 0L
     private val checkingSources = MutableStateFlow(LocalAudioSourceCheckState())
     val sourceChecks = checkingSources.asStateFlow()
     private var artworkJob: Job? = null
@@ -82,7 +84,7 @@ class AppLocalAudioRepository internal constructor(
     private val sourceObservations = mutableMapOf<String, Long>() // guarded by commands
     private val authorizationEpochs = mutableMapOf<String, Long>() // directory grant reauthorization, guarded by commands
     private data class SourceInspection(val stored: StoredLocalAudio, val epoch: Long, val observation: Long, val authorization: Long)
-    private data class PendingOrganization(val backup: LocalAudioBackup, val revision: Long)
+    private data class PendingOrganization(val backup: LocalAudioBackup, val revision: Long, val version: LocalAudioVersionToken?)
     private var pendingOrganization: PendingOrganization? = null
     private val directoryEpochs = mutableMapOf<String, Long>() // guarded by commands
     private data class DirectoryRefresh(val stored: StoredLocalAudioDirectory, val epoch: Long)
@@ -152,6 +154,34 @@ class AppLocalAudioRepository internal constructor(
         store.sortFolder(folderId, sort, descending, expectedRevision) { context.ensureActive() }
     }
 
+    fun addToFolderBatch(folderId: String, audioIds: List<String>, expectedVersion: LocalAudioVersionToken,
+        result: (Result<LocalAudioBatchResult>) -> Unit = {}): Job =
+        organizeVersioned(audioIds, LocalAudioBatchAction.ADD, folderId, null, expectedVersion, result)
+    fun removeFromFolderBatch(folderId: String, audioIds: List<String>, expectedVersion: LocalAudioVersionToken,
+        result: (Result<LocalAudioBatchResult>) -> Unit = {}): Job =
+        organizeVersioned(audioIds, LocalAudioBatchAction.REMOVE, folderId, null, expectedVersion, result)
+    fun moveToFolderBatch(sourceFolderId: String, destinationFolderId: String, audioIds: List<String>,
+        expectedVersion: LocalAudioVersionToken, result: (Result<LocalAudioBatchResult>) -> Unit = {}): Job =
+        organizeVersioned(audioIds, LocalAudioBatchAction.MOVE, sourceFolderId, destinationFolderId, expectedVersion, result)
+    private fun organizeVersioned(audioIds: List<String>, action: LocalAudioBatchAction, folderId: String,
+        destination: String?, version: LocalAudioVersionToken, result: (Result<LocalAudioBatchResult>) -> Unit): Job {
+        val frozen = audioIds.toList()
+        return submit(result) {
+            val context = currentCoroutineContext()
+            store.organize(frozen, action, folderId, destination, version) { context.ensureActive() }
+        }
+    }
+    fun sortFolder(folderId: String, sort: LocalAudioSort, descending: Boolean = false,
+        expectedVersion: LocalAudioVersionToken, result: (Result<LocalAudioSortResult>) -> Unit = {}): Job = submit(result) {
+        val context = currentCoroutineContext()
+        store.sortFolder(folderId, sort, descending, expectedVersion) { context.ensureActive() }
+    }
+    fun reorder(folderId: String, audioIds: List<String>, expectedVersion: LocalAudioVersionToken,
+        result: (Result<Unit>) -> Unit = {}): Job {
+        val frozen = audioIds.toList()
+        return submit(result) { store.reorder(folderId, frozen, expectedVersion) }
+    }
+
     /** A metadata-only query. A newer query cancels the previous request and owns the result. */
     fun search(request: LocalAudioQuery, result: (Result<LocalAudioSearchPage>) -> Unit = {}): Job {
         val epoch = ++searchEpoch
@@ -166,7 +196,7 @@ class AppLocalAudioRepository internal constructor(
                     val found = LocalAudioSearch.query(snapshot, request) { context.ensureActive() }
                     commands.withLock {
                         context.ensureActive()
-                        if (epoch != searchEpoch || state.value.revision != found.revision) {
+                        if (epoch != searchEpoch || !request.isCurrent(state.value, found)) {
                             throw LocalAudioFailure(LocalAudioError.STALE_STATE)
                         }
                     }
@@ -176,7 +206,7 @@ class AppLocalAudioRepository internal constructor(
                 val published = commands.withLock {
                     currentCoroutineContext().ensureActive()
                     if (epoch != searchEpoch) false else {
-                        if (state.value.revision != page.revision) throw LocalAudioFailure(LocalAudioError.STALE_STATE)
+                        if (!request.isCurrent(state.value, page)) throw LocalAudioFailure(LocalAudioError.STALE_STATE)
                         searching.value = LocalAudioSearchState(page = page)
                         true
                     }
@@ -203,13 +233,20 @@ class AppLocalAudioRepository internal constructor(
 
     /** Explicit selected-source check; already committed observations survive cancellation. */
     fun checkSources(audioIds: List<String>, expectedRevision: Long,
-        result: (Result<List<LocalAudioSourceCheckResult>>) -> Unit = {}): Job {
+        result: (Result<List<LocalAudioSourceCheckResult>>) -> Unit = {}): Job =
+        checkSourcesInternal(audioIds, expectedRevision, null, result)
+    fun checkSources(audioIds: List<String>, expectedVersion: LocalAudioVersionToken,
+        result: (Result<List<LocalAudioSourceCheckResult>>) -> Unit = {}): Job =
+        checkSourcesInternal(audioIds, null, expectedVersion, result)
+    private fun checkSourcesInternal(audioIds: List<String>, expectedRevision: Long?, expectedVersion: LocalAudioVersionToken?,
+        result: (Result<List<LocalAudioSourceCheckResult>>) -> Unit): Job {
         val frozen = audioIds.toList()
         if (sourceCheckJob?.isCompleted == false) return scope.launch {
             result(Result.failure(LocalAudioFailure(LocalAudioError.LIMIT_REACHED)))
         }
-        return scope.launch {
-            checkingSources.value = LocalAudioSourceCheckState(running = true)
+        val runId = ++sourceCheckRunId
+        checkingSources.value = LocalAudioSourceCheckState(running = true, runId = runId)
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 initialization.join()
                 val results = withContext(Dispatchers.IO) {
@@ -222,15 +259,17 @@ class AppLocalAudioRepository internal constructor(
                                 runCatching { LocalAudioLimits.requireId(id) }.isFailure }) {
                             throw LocalAudioFailure(LocalAudioError.INVALID_ORDER)
                         }
-                        if (state.value.revision != expectedRevision) throw LocalAudioFailure(LocalAudioError.STALE_STATE)
+                        if (expectedVersion?.matches(state.value) == false ||
+                            (expectedVersion == null && state.value.revision != expectedRevision))
+                            throw LocalAudioFailure(LocalAudioError.STALE_STATE)
                         val sources = frozen.map { store.source(it) ?: throw LocalAudioFailure(LocalAudioError.NOT_FOUND) }
                         sources.map(::captureInspection)
                     }
-                    checkingSources.value = checkingSources.value.copy(total = selected.size)
+                    updateSourceCheck(runId) { it.copy(total = selected.size) }
                     val observations = mutableListOf<LocalAudioSourceCheckResult>()
                     for (inspection in selected) {
                         context.ensureActive()
-                        checkingSources.value = checkingSources.value.copy(currentAudioId = inspection.stored.item.id)
+                        updateSourceCheck(runId) { it.copy(currentAudioId = inspection.stored.item.id) }
                         // Avoid opening sources already superseded since the selection was frozen.
                         val outdated = commands.withLock { obsoleteInspection(inspection) }
                         val observation = if (outdated != null) outdated else {
@@ -248,24 +287,44 @@ class AppLocalAudioRepository internal constructor(
                             }
                         }
                         observations += observation
-                        checkingSources.value = checkingSources.value.copy(processed = observations.size, results = observations.toList())
+                        updateSourceCheck(runId) { it.copy(processed = observations.size, results = observations.toList()) }
                     }
                     observations.toList()
                 }
-                checkingSources.value = checkingSources.value.copy(running = false, currentAudioId = null, completed = true)
-                result(Result.success(results))
+                updateSourceCheck(runId) { it.copy(running = false, currentAudioId = null, completed = true) }
+                if (checkingSources.value.runId == runId) {
+                    sourceCheckJob = null // Work is finished; callbacks may start the next run.
+                    result(Result.success(results))
+                }
             } catch (error: CancellationException) {
-                checkingSources.value = checkingSources.value.copy(running = false, currentAudioId = null, cancelled = true)
+                updateSourceCheck(runId) { it.copy(running = false, currentAudioId = null, cancelled = true) }
                 throw error
             } catch (error: Exception) {
                 val reason = failure(error)
-                checkingSources.value = checkingSources.value.copy(running = false, currentAudioId = null, error = reason.error)
-                result(Result.failure(reason))
+                updateSourceCheck(runId) { it.copy(running = false, currentAudioId = null, error = reason.error) }
+                if (checkingSources.value.runId == runId) {
+                    sourceCheckJob = null
+                    result(Result.failure(reason))
+                }
             }
-        }.also { sourceCheckJob = it }
+        }
+        sourceCheckJob = job
+        job.invokeOnCompletion { if (job.isCancelled) updateSourceCheck(runId) {
+            it.copy(running = false, currentAudioId = null, cancelled = true)
+        } }
+        job.start()
+        return job
     }
 
     fun cancelSourceCheck() { sourceCheckJob?.cancel() }
+    /** Dismiss results and invalidate late publications; cleanup still owns the busy slot. */
+    fun clearSourceCheck() {
+        sourceCheckJob?.cancel()
+        checkingSources.value = LocalAudioSourceCheckState(runId = ++sourceCheckRunId)
+    }
+    private inline fun updateSourceCheck(runId: Long, change: (LocalAudioSourceCheckState) -> LocalAudioSourceCheckState) {
+        checkingSources.update { if (it.runId == runId) change(it) else it }
+    }
 
     /** Immutable derived image only. Coil can use this File; no source capability is exposed. */
     fun artworkFile(key: String): File? = artwork?.resolve(key)
@@ -325,7 +384,13 @@ class AppLocalAudioRepository internal constructor(
 
     /** Explicit, bounded repair for old/missing covers; source checks stay lightweight. */
     fun fillArtwork(audioIds: List<String>, expectedRevision: Long,
-        result: (Result<List<LocalAudioArtworkResult>>) -> Unit = {}): Job {
+        result: (Result<List<LocalAudioArtworkResult>>) -> Unit = {}): Job =
+        fillArtworkInternal(audioIds, expectedRevision, null, result)
+    fun fillArtwork(audioIds: List<String>, expectedVersion: LocalAudioVersionToken,
+        result: (Result<List<LocalAudioArtworkResult>>) -> Unit = {}): Job =
+        fillArtworkInternal(audioIds, null, expectedVersion, result)
+    private fun fillArtworkInternal(audioIds: List<String>, expectedRevision: Long?, expectedVersion: LocalAudioVersionToken?,
+        result: (Result<List<LocalAudioArtworkResult>>) -> Unit): Job {
         val frozen = audioIds.toList()
         if (artworkJob?.isCompleted == false) return scope.launch {
             result(Result.failure(LocalAudioFailure(LocalAudioError.LIMIT_REACHED)))
@@ -343,7 +408,9 @@ class AppLocalAudioRepository internal constructor(
                         if (frozen.distinct().size != frozen.size || frozen.any { runCatching { LocalAudioLimits.requireId(it) }.isFailure }) {
                             throw LocalAudioFailure(LocalAudioError.INVALID_ORDER)
                         }
-                        if (state.value.revision != expectedRevision) throw LocalAudioFailure(LocalAudioError.STALE_STATE)
+                        if (expectedVersion?.matches(state.value) == false ||
+                            (expectedVersion == null && state.value.revision != expectedRevision))
+                            throw LocalAudioFailure(LocalAudioError.STALE_STATE)
                         frozen.map { store.source(it) ?: throw LocalAudioFailure(LocalAudioError.NOT_FOUND) }.map(::captureInspection)
                     }
                     fillingArtwork.value = fillingArtwork.value.copy(total = selected.size)
@@ -437,13 +504,27 @@ class AppLocalAudioRepository internal constructor(
     fun importCue(folderId: String, cue: Uri, audioUris: List<Uri>,
         expectedPreviewRevision: Long, expectedRevision: Long,
         bindings: Map<Int, Int> = emptyMap(), mode: LocalImportMode = LocalImportMode.COPY,
-        grantedFlags: Int = 0, result: (Result<List<LocalAudioItem>>) -> Unit = {}): Job {
+        grantedFlags: Int = 0, result: (Result<List<LocalAudioItem>>) -> Unit = {}): Job =
+        importCueInternal(folderId, cue, audioUris, expectedPreviewRevision, expectedRevision, null,
+            bindings, mode, grantedFlags, result)
+    fun importCue(folderId: String, cue: Uri, audioUris: List<Uri>,
+        expectedPreviewRevision: Long, expectedVersion: LocalAudioVersionToken,
+        bindings: Map<Int, Int> = emptyMap(), mode: LocalImportMode = LocalImportMode.COPY,
+        grantedFlags: Int = 0, result: (Result<List<LocalAudioItem>>) -> Unit = {}): Job =
+        importCueInternal(folderId, cue, audioUris, expectedPreviewRevision, null, expectedVersion,
+            bindings, mode, grantedFlags, result)
+    private fun importCueInternal(folderId: String, cue: Uri, audioUris: List<Uri>,
+        expectedPreviewRevision: Long, expectedRevision: Long?, expectedVersion: LocalAudioVersionToken?,
+        bindings: Map<Int, Int>, mode: LocalImportMode, grantedFlags: Int,
+        result: (Result<List<LocalAudioItem>>) -> Unit): Job {
         val uris = audioUris.toList()
         val mapping = bindings.toMap()
         val accepted = cuePreview.stampFor(expectedPreviewRevision)
         if (importJob?.isCompleted == false || transferJob?.isCompleted == false) return scope.launch {
             result(Result.failure(LocalAudioFailure(LocalAudioError.LIMIT_REACHED)))
         }
+        val runId = ++importRunId
+        importing.value = LocalAudioImportState(running = true, runId = runId)
         val job = scope.launch(start = CoroutineStart.LAZY) {
             initialization.join()
             val response = try {
@@ -452,11 +533,10 @@ class AppLocalAudioRepository internal constructor(
                         val context = currentCoroutineContext()
                         var copied: CopiedLocalAudio? = null
                         var lease: LocalArtworkLease? = null
-                        importing.value = LocalAudioImportState(running = true)
                         try {
                             commands.withLock {
                                 requireReady()
-                                if (state.value.revision != expectedRevision || accepted == null ||
+                                if ((expectedVersion?.matches(state.value) ?: (state.value.revision == expectedRevision)).not() || accepted == null ||
                                     cuePreview.stampFor(expectedPreviewRevision) != accepted)
                                     throw LocalAudioFailure(LocalAudioError.STALE_STATE)
                                 if (state.value.folders.none { it.id == folderId }) throw LocalAudioFailure(LocalAudioError.NOT_FOUND)
@@ -470,14 +550,14 @@ class AppLocalAudioRepository internal constructor(
                             val candidate = preview.candidates.first { it.index == selected }
                             val before = documents.describe(uri)
                             before.readError?.let { throw LocalAudioFailure(it) }
-                            importing.value = importing.value.copy(total = preview.tracks.size, currentName = candidate.name,
-                                expectedBytes = before.size)
+                            updateImport(runId) { it.copy(total = preview.tracks.size, currentName = candidate.name,
+                                expectedBytes = before.size) }
                             if (mode == LocalImportMode.REFERENCE) commands.withLock {
                                 acquireSourceRead(uri, grantedFlags)
                                 importingGrants.add(uri.toString())
                             } else {
                                 copied = files.copy({ documents.open(uri) }, before.size, { context.ensureActive() }) { count ->
-                                    importing.value = importing.value.copy(copiedBytes = count)
+                                    updateImport(runId) { it.copy(copiedBytes = count) }
                                 }
                                 withContext(NonCancellable) { commands.withLock { importingCopies.add(copied.name) } }
                             }
@@ -514,10 +594,12 @@ class AppLocalAudioRepository internal constructor(
                             commands.withLock {
                                 context.ensureActive()
                                 if (cuePreview.stampFor(expectedPreviewRevision) != accepted) throw LocalAudioFailure(LocalAudioError.STALE_STATE)
-                                val stored = store.importCue(folderId, tracks, expectedRevision) { context.ensureActive() }
+                                val stored = if (expectedVersion != null) {
+                                    store.importCue(folderId, tracks, expectedVersion) { context.ensureActive() }
+                                } else store.importCue(folderId, tracks, requireNotNull(expectedRevision)) { context.ensureActive() }
                                 stored.forEach { nextSourceObservation(it.id) }
-                                importing.value = importing.value.copy(processed = stored.size,
-                                    results = stored.map { LocalAudioImportResult(it.title, it.id) })
+                                updateImport(runId) { it.copy(processed = stored.size,
+                                    results = stored.map { LocalAudioImportResult(it.title, it.id) }) }
                                 publish()
                                 stored
                             }
@@ -531,14 +613,14 @@ class AppLocalAudioRepository internal constructor(
                                 importingGrants.clear()
                                 pruneArtwork()
                                 releaseUnusedGrants()
-                                importing.value = importing.value.copy(running = false, currentName = null)
+                                updateImport(runId) { it.copy(running = false, currentName = null) }
                             } }
                         }
                     }
                 }
                 Result.success(items)
             } catch (error: CancellationException) {
-                importing.value = importing.value.copy(running = false, currentName = null, cancelled = true)
+                updateImport(runId) { it.copy(running = false, currentName = null, cancelled = true) }
                 throw error
             } catch (error: Exception) {
                 val mapped = if (error is PreviewFailure) LocalAudioFailure(when (error.reason) {
@@ -547,12 +629,19 @@ class AppLocalAudioRepository internal constructor(
                     CuePreviewError.TOO_LARGE -> LocalAudioError.TOO_LARGE
                     else -> LocalAudioError.READ_FAILED
                 }) else failure(error)
-                mutable.value = mutable.value.copy(error = mapped.error)
                 Result.failure(mapped)
             }
-            result(response)
+            updateImport(runId) { it.copy(running = false, currentName = null,
+                completed = response.isSuccess, error = (response.exceptionOrNull() as? LocalAudioFailure)?.error) }
+            if (importing.value.runId == runId) {
+                importJob = null // File/grant cleanup above is complete before releasing the slot.
+                result(response)
+            }
         }
         importJob = job
+        job.invokeOnCompletion { if (job.isCancelled) updateImport(runId) {
+            it.copy(running = false, currentName = null, cancelled = true)
+        } }
         job.start()
         return job
     }
@@ -596,6 +685,13 @@ class AppLocalAudioRepository internal constructor(
 
     /** Cancelling keeps already committed imports and removes the current partial copy. */
     fun cancelImport() { importJob?.cancel() }
+    fun clearImport() {
+        importJob?.cancel()
+        importing.value = LocalAudioImportState(runId = ++importRunId)
+    }
+    private inline fun updateImport(runId: Long, change: (LocalAudioImportState) -> LocalAudioImportState) {
+        importing.update { if (it.runId == runId) change(it) else it }
+    }
 
     fun cancelTransfer() { transferJob?.cancel() }
 
@@ -683,7 +779,7 @@ class AppLocalAudioRepository internal constructor(
             }
             commands.withLock {
                 context.ensureActive()
-                store.previewOrganization(backup).also { pendingOrganization = PendingOrganization(backup, it.expectedRevision) }
+                store.previewOrganization(backup).also { pendingOrganization = PendingOrganization(backup, it.expectedRevision, it.expectedVersion) }
             }
         }
 
@@ -697,6 +793,20 @@ class AppLocalAudioRepository internal constructor(
             commands.withLock {
                 currentCoroutineContext().ensureActive()
                 store.restoreOrganization(pending.backup, expectedRevision) { context.ensureActive() }
+                    .also { publish(); pendingOrganization = null }
+            }
+        }
+
+    fun restoreOrganization(backupId: String, expectedVersion: LocalAudioVersionToken,
+        result: (Result<LocalAudioRestoreResult>) -> Unit = {}): Job =
+        startTransfer(LocalAudioTransferKind.ORGANIZATION_RESTORE, result) {
+            val context = currentCoroutineContext()
+            val pending = pendingOrganization?.takeIf { it.backup.id == backupId }
+                ?: throw LocalAudioFailure(LocalAudioError.INVALID_BACKUP)
+            if (pending.version != expectedVersion) throw LocalAudioFailure(LocalAudioError.STALE_STATE)
+            commands.withLock {
+                context.ensureActive()
+                store.restoreOrganization(pending.backup, expectedVersion) { context.ensureActive() }
                     .also { publish(); pendingOrganization = null }
             }
         }
@@ -768,13 +878,13 @@ class AppLocalAudioRepository internal constructor(
     }
 
     /** Save an explicit SAF tree association. Even COPY needs a persistent grant for later refresh. */
-    fun linkDirectory(folderId: String, tree: Uri, name: String, mode: LocalImportMode = LocalImportMode.COPY,
+    fun linkDirectory(folderId: String, tree: Uri, name: String? = null, mode: LocalImportMode = LocalImportMode.COPY,
         grantedFlags: Int, includeSubdirectories: Boolean = false,
         result: (Result<LocalAudioDirectoryLink>) -> Unit = {}): Job = submit(result) {
         if (!android.provider.DocumentsContract.isTreeUri(tree)) throw LocalAudioFailure(LocalAudioError.READ_FAILED)
         try {
             acquireSourceRead(tree, grantedFlags, explicit = true)
-            store.linkDirectory(folderId, tree.toString(), name.trim(), mode, includeSubdirectories)
+            store.linkDirectory(folderId, tree.toString(), name?.trim() ?: documents.directoryName(tree), mode, includeSubdirectories)
         } finally { releaseUnusedGrants() }
     }
 
@@ -1020,7 +1130,9 @@ class AppLocalAudioRepository internal constructor(
         if (importJob?.isCompleted == false || transferJob?.isCompleted == false) return scope.launch {
             result(Result.failure(LocalAudioFailure(LocalAudioError.LIMIT_REACHED)))
         }
-        return scope.launch {
+        val runId = ++importRunId
+        importing.value = LocalAudioImportState(running = true, runId = runId)
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             initialization.join()
             var refreshing: DirectoryRefresh? = null
             val response = try {
@@ -1036,7 +1148,6 @@ class AppLocalAudioRepository internal constructor(
                             refreshing?.let { importingGrants.add(it.stored.treeUri) }
                             target
                         }
-                        importing.value = LocalAudioImportState(running = true)
                         try {
                             val chosen = refreshing?.let { refresh ->
                                 val tree = Uri.parse(refresh.stored.treeUri)
@@ -1047,21 +1158,21 @@ class AppLocalAudioRepository internal constructor(
                                     .distinctBy { AndroidLocalAudioDocuments.identity(it.uri) }.map { it to tree }
                             } ?: inputs()
                             if (chosen.size > LocalAudioLimits.MAX_BATCH) throw LocalAudioFailure(LocalAudioError.LIMIT_REACHED)
-                            importing.value = importing.value.copy(total = chosen.size)
+                            updateImport(runId) { it.copy(total = chosen.size) }
                             val results = mutableListOf<LocalAudioImportResult>()
                             for ((document, grant) in chosen) {
                                 currentCoroutineContext().ensureActive()
-                                importing.value = importing.value.copy(currentName = document.name, copiedBytes = 0, expectedBytes = document.size)
+                                updateImport(runId) { it.copy(currentName = document.name, copiedBytes = 0, expectedBytes = document.size) }
                                 val item = try {
                                     LocalAudioImportResult(document.name, importOne(targetFolder, document, grant,
-                                        refreshing?.stored?.link?.mode ?: mode, flags, refreshing).id)
+                                        refreshing?.stored?.link?.mode ?: mode, flags, refreshing, runId).id)
                                 } catch (error: CancellationException) { throw error }
                                 catch (error: Exception) {
                                     val failed = failure(error)
                                     LocalAudioImportResult(document.name, error = failed.error, recoveryAction = failed.recoveryAction)
                                 }
                                 results += item
-                                importing.value = importing.value.copy(processed = results.size, results = results.toList())
+                                updateImport(runId) { it.copy(processed = results.size, results = results.toList()) }
                                 commands.withLock { publish() }
                             }
                             refreshing?.let { refresh -> commands.withLock {
@@ -1069,7 +1180,7 @@ class AppLocalAudioRepository internal constructor(
                                 ensureDirectoryCurrent(refresh)
                                 store.finishDirectoryRefresh(refresh.stored.link.id,
                                     chosen.map { AndroidLocalAudioDocuments.identity(it.first.uri) }.toSet(),
-                                    System.currentTimeMillis().coerceAtLeast(0), results.firstNotNullOfOrNull { it.error })
+                                    System.currentTimeMillis().coerceAtLeast(0), failedItems = results.count { it.error != null })
                                 publish()
                             } }
                             results.toList()
@@ -1081,7 +1192,7 @@ class AppLocalAudioRepository internal constructor(
                             throw error
                         } finally {
                             withContext(NonCancellable) {
-                                importing.value = importing.value.copy(running = false, currentName = null)
+                                updateImport(runId) { it.copy(running = false, currentName = null) }
                                 commands.withLock {
                                     importingGrants.clear(); importingCopies.clear()
                                     publish()
@@ -1092,19 +1203,29 @@ class AppLocalAudioRepository internal constructor(
                     }
                 }.let { Result.success(it) }
             } catch (error: CancellationException) {
-                importing.value = importing.value.copy(running = false, currentName = null, cancelled = true)
+                updateImport(runId) { it.copy(running = false, currentName = null, cancelled = true) }
                 throw error
             } catch (error: Exception) {
                 val reason = failure(error)
-                mutable.value = mutable.value.copy(error = reason.error)
                 Result.failure(reason)
             }
-            result(response)
-        }.also { importJob = it }
+            updateImport(runId) { it.copy(running = false, currentName = null,
+                completed = response.isSuccess, error = (response.exceptionOrNull() as? LocalAudioFailure)?.error) }
+            if (importing.value.runId == runId) {
+                importJob = null // File/grant cleanup above is complete before releasing the slot.
+                result(response)
+            }
+        }
+        importJob = job
+        job.invokeOnCompletion { if (job.isCancelled) updateImport(runId) {
+            it.copy(running = false, currentName = null, cancelled = true)
+        } }
+        job.start()
+        return job
     }
 
     private suspend fun importOne(folderId: String, document: LocalAudioDocument, grant: Uri, mode: LocalImportMode, flags: Int,
-        refreshing: DirectoryRefresh? = null): LocalAudioItem {
+        refreshing: DirectoryRefresh? = null, runId: Long): LocalAudioItem {
         val context = currentCoroutineContext()
         document.readError?.let { throw LocalAudioFailure(it) }
         val identity = AndroidLocalAudioDocuments.identity(document.uri)
@@ -1158,7 +1279,7 @@ class AppLocalAudioRepository internal constructor(
         val copied = files.copy({ documents.open(document.uri) }, document.size, { context.ensureActive() }) { bytes ->
             val now = System.nanoTime()
             if (now - lastPublished >= 200_000_000L) {
-                importing.value = importing.value.copy(copiedBytes = bytes)
+                updateImport(runId) { it.copy(copiedBytes = bytes) }
                 lastPublished = now
             }
         }
@@ -1184,7 +1305,7 @@ class AppLocalAudioRepository internal constructor(
                     if (files.resolve(copied.name).length() != copied.bytes) throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
                     val item = store.importAudio(folderId, copyMetadata.copy(sizeBytes = copied.bytes, artworkKey = lease?.key), LocalAudioSource(mode, copied.name, copied.name), origin)
                     nextSourceObservation(item.id)
-                    importing.value = importing.value.copy(copiedBytes = copied.bytes)
+                    updateImport(runId) { it.copy(copiedBytes = copied.bytes) }
                     item
                 }
             } finally {
@@ -1233,7 +1354,7 @@ class AppLocalAudioRepository internal constructor(
         mutable.value = store.read().copy(ready = true)
         searching.update { search ->
             val page = search.page
-            if (page != null && page.revision != mutable.value.revision) search.copy(error = LocalAudioError.STALE_STATE)
+            if (page != null && !page.isCurrent(mutable.value)) search.copy(error = LocalAudioError.STALE_STATE)
             else search
         }
     }

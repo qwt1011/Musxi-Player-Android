@@ -162,9 +162,18 @@
 | `bookmarkedOnly` | 默认 false；true 时只保留至少有一个时间书签的音频 |
 | `sort` / `descending` | 默认 `MANUAL`、false；也可选 `TITLE/FILE_NAME/ADDED_AT/DURATION/LAST_PROGRESS` |
 | `offset` / `limit` | 默认 0／100；offset 为 0～20,000，limit 为 1～200，不默默截断非法参数 |
-| `expectedRevision` | 第一页可省略；后续页必须带第一页的 revision，任何库变化均要求重新查询 |
+| `expectedRevision` | 旧接口兼容字段；始终检查全变化 revision，包括播放检查点。新调用建议使用 expectedToken |
+| `expectedToken` | 使用上一页返回的 token，绑定同一筛选／排序；offset、limit 可变化。后续页必须带 token 或旧 expectedRevision，不能裸 offset 续页 |
 
-非法参数在构造 Query 时抛出 `IllegalArgumentException`，前端应约束长度与范围。未就绪返回 `STORAGE_FAILED`，文件夹消失为 `NOT_FOUND`，revision 过期为 `STALE_STATE`。查询过程中库已变化也拒绝返回成功。已显示页面之后发生库变化时保留原 page 并标记 `error=STALE_STATE`，前端停止续页、重查第一页；不把旧条目继续当作最新可编辑状态。服务进度保存也会改变 revision，不自动为每个检查点反复执行查询。整理/进度 revision 本轮尚未拆分；进度筛选及进度/最近播放排序需要相应分页 token，不能只取消进度写入时的递增。拆分范围与临时接线方式见[需求交付](backend-requests-20261111.md#交付说明codex-填写)。
+非法参数在构造 Query 时抛出 `IllegalArgumentException`，前端应约束长度与范围。未就绪返回 `STORAGE_FAILED`，文件夹消失为 `NOT_FOUND`，版本过期为 `STALE_STATE`；裸 offset 续页或把 token 挪给另一份查询为 `INVALID_TARGET`。page 新增 `token`；查询完成与发布时使用同一依赖规则：始终检查整理版本，进度筛选非 ANY 或 LAST_PROGRESS 排序同时检查进度版本。普通查询不因进度检查点过期；已显示的进度相关查询过期后保留 page 并标记 STALE_STATE，不自动反复重搜。旧 expectedRevision 的严格检查继续保留到发布和后续页，不能用新 token 将其放宽。
+
+### 整理与进度版本（2026-11-17）
+
+`LocalAudioLibraryState` 新增 `organizationRevision`、`progressRevision`，原 `revision` 保留为全变化兼容计数；SQLite schema 6 从旧计数初始化两个新值，不清库。播放进度／完成标记／游标保存只提升进度和兼容计数；名称、成员、顺序、元数据、可用性、书签及目录等变化提升整理和兼容计数。恢复若写入进度或游标，也提升进度计数。版本耗尽时事务失败，不回绕成旧令牌。
+
+新调用使用 `state.organizationToken: LocalAudioVersionToken` 进行批量归属、人工排序、非进度规则排序、来源检查、补图和 CUE 导入。已有 Long expectedRevision 重载保持检查旧 revision；不要把 organizationRevision 的裸 Long 传给旧后端重载。`sortFolder(..., LAST_PROGRESS, ..., expectedVersion)` 必须带 `state.fullToken`。`previewOrganization` 新增 `expectedVersion`，恢复使用它的完整双版本，不允许仅组织令牌；备份合并仍保留当前已有进度和游标。
+
+当前页面的 `LocalAudioController` 适配层与 withFreshRevision 辅助函数已改为取组织版本并转成显式 token，只调整数据接线，不变更视觉和交互。仓库调用统一来源守卫仍有效；进度版本与来源指纹不是同一个概念，不可互换。详细范围与验证见[双版本交付](backend-local-versions-20261117.md)。
 
 标题按当前显示标题（别名优先），文件名保留原文件名，自然数字序为 1、2、10；添加时间与时长按数值。`LAST_PROGRESS` 按进度的 `updatedAtMs`（最近保存时间），不按听到的位置排序；查最近在前用 descending=true。未知时长／未保存进度在两个方向都放末尾。同值条目保留当前文件夹人工顺序，全库则保留库顺序；倒序只反转主键。`MANUAL` 在文件夹内读取成员顺序，可只读反向显示；全库使用库顺序，忽略 descending。查询排序仅影响返回结果，不写回文件夹。
 
@@ -231,3 +240,16 @@ REFERENCE导入／重关联与播放来源探测继续要求权限有效、来�
 已知引用文件大小或修改时间变化返回 `SOURCE_CHANGED`，避免把旧进度盲目套到另一份文件；同大小且提供方修改时间不可靠的替换仍不能可靠识别。后端解析文件时保留不可用条目，权限失败/缺失/不可读取分开表达，不删除用户名称和书签；重新关联后恢复。
 
 音频格式根据 MIME/常见扩展名接受，元数据可缺失；播放复用 Media3，实际格式/seek/系统后台效果待设备样本。此阶段不提取大型封面、不做内嵌章节或批量标签改写，不引入额外解码依赖。常用操作维持简洁，复制/引用在导入时选择，递归子目录放在按需选项中。
+
+
+### 目录刷新与结果生命周期（2026-11-17 第二部分）
+
+`linkDirectory(..., name: String? = null, ...)` 省略名称时由 Documents 层在 IO 读取系统目录显示名；显式名称优先，空白显式名仍按原规则拒绝，不从 URI 猜名称。沿用现有持久读授权，未增加文件／存储权限。
+
+`LocalAudioDirectoryLink.error` 表示整个目录的授权／列举等错误；完整扫描内的个别文件错误在 `results` 返回，失败数量持久化为 `lastRefreshFailures`。成功完整扫描清除目录错误并更新数量；整目录失败／取消保留上次成功扫描时间、缺失数和逐项失败数量，不把尚未扫描到的引用标为缺失。旧 SQLite schema 6 → 7 只添加一个默认0的整数字段，不迁移音频本体。
+
+`imports` 新增 `runId/completed/error`，`sourceChecks` 新增 `runId`。completed 表示整批执行完毕，可仍有逐项失败；error 表示整批失败，cancelled 表示取消，三者不混用。任务编号仅当前进程内有效，重启回空闲，不恢复或重放导入。
+
+`clearImport()`／`clearSourceCheck()` 取消当前任务、提升编号并清空结果；所有迟到状态写入和 callback 核对编号，不允许旧任务恢复已关闭结果。取消保留已提交条目，清理当前未提交文件及授权；清理未结束时新任务仍返回 LIMIT_REACHED，显示空闲不代表底层资源已释放。成功／失败回调前释放已完成任务槽位，允许回调启动下一轮。原 cancel 方法保持保留部分结果的语义。
+
+本轮没有新增依赖、调度框架、后台服务、重启任务恢复或页面；第一部分版本与事务保护保留。完整交付与验证见[目录及任务生命周期](backend-local-lifecycle-20261117.md)。

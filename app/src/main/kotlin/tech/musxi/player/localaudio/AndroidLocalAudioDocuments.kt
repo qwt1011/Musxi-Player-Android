@@ -40,6 +40,7 @@ internal interface LocalAudioDocuments {
     }
     fun acquireRead(grant: Uri, flags: Int)
     fun releaseUnused(retained: Set<String>)
+    fun directoryName(tree: Uri): String = "音频目录"
     fun children(tree: Uri, recursive: Boolean, checkCancelled: () -> Unit = {}): List<LocalAudioDocument>
 }
 
@@ -173,6 +174,25 @@ internal class AndroidLocalAudioDocuments(context: Context,
             }
         }
         if (!grants.edit().putStringSet("owned", owned).commit()) throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
+    }
+
+    override fun directoryName(tree: Uri): String = readable {
+        requireContent(tree)
+        val rootId = DocumentsContract.getTreeDocumentId(tree)
+        val uri = DocumentsContract.buildDocumentUriUsingTree(tree, rootId)
+        val cursor = queryMetadata(uri, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME))
+            ?: throw LocalAudioFailure(LocalAudioError.READ_FAILED)
+        cursor.use {
+            val extras: android.os.Bundle? = cursor.extras
+            if (extras?.getBoolean(DocumentsContract.EXTRA_LOADING, false) == true ||
+                !extras?.getString(DocumentsContract.EXTRA_ERROR).isNullOrBlank()) {
+                throw LocalAudioFailure(LocalAudioError.READ_FAILED)
+            }
+            if (!cursor.moveToFirst()) throw LocalAudioFailure(LocalAudioError.NOT_FOUND)
+            val nameIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            if (nameIndex < 0 || cursor.isNull(nameIndex)) throw LocalAudioFailure(LocalAudioError.READ_FAILED)
+            LocalAudioNames.clean(cursor.getString(nameIndex)) ?: "音频目录"
+        }
     }
 
     override fun children(tree: Uri, recursive: Boolean, checkCancelled: () -> Unit): List<LocalAudioDocument> = readable {

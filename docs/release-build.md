@@ -22,6 +22,7 @@ store password 与 key password 使用同一个密码。不要把密码写入
 
 v0.2 是 `tech.musxi.player` 的首次正式签名发布，版本为 `0.2.0` / code 5。
 v0.3 沿用相同签名及包名，版本为 `0.3.0` / code 6，支持覆盖更新。
+v0.3.1 继续沿用该签名及包名，版本为 `0.3.1` / code 7。
 旧 v0.1 的 `tech.musxi.player.dev` 使用开发签名，两种包各自保存数据，可以并存；不能用正式包自动迁移开发包账号或队列。
 
 ## 无私钥的Release检查

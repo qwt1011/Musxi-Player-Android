@@ -39,6 +39,43 @@ class AndroidLocalAudioDocumentsTest {
         assertFalse(provider.queries.any { it.contains("sub/children") })
     }
 
+    @Test fun directoryNameReadsTheTreeRootDisplayName() {
+        assertEquals("音乐收藏", documents.directoryName(tree))
+        assertTrue(provider.queries.any { it.endsWith("/tree/root/document/root") })
+    }
+
+    @Test fun blankDirectoryNameUsesTheGenericLabelAndMissingNameFails() {
+        provider.rootName = " \u0001 "
+        assertEquals("音频目录", documents.directoryName(tree))
+        provider.rootName = null
+        assertEquals(LocalAudioError.READ_FAILED,
+            assertThrows(LocalAudioFailure::class.java) { documents.directoryName(tree) }.error)
+    }
+
+    @Test fun directoryNameRejectsInvalidTreesAndTemporaryProviderStates() {
+        assertEquals(LocalAudioError.READ_FAILED,
+            assertThrows(LocalAudioFailure::class.java) { documents.directoryName(Uri.parse("https://example.com/tree/root")) }.error)
+        assertEquals(LocalAudioError.READ_FAILED,
+            assertThrows(LocalAudioFailure::class.java) {
+                documents.directoryName(Uri.parse("content://local-audio-test/document/a"))
+            }.error)
+        provider.denied = true
+        assertEquals(LocalAudioError.PERMISSION_REQUIRED,
+            assertThrows(LocalAudioFailure::class.java) { documents.directoryName(tree) }.error)
+        provider.denied = false
+        provider.fail = true
+        assertEquals(LocalAudioError.READ_FAILED,
+            assertThrows(LocalAudioFailure::class.java) { documents.directoryName(tree) }.error)
+        provider.fail = false
+        provider.loading = true
+        assertEquals(LocalAudioError.READ_FAILED,
+            assertThrows(LocalAudioFailure::class.java) { documents.directoryName(tree) }.error)
+        provider.loading = false
+        provider.error = "Provider unavailable"
+        assertEquals(LocalAudioError.READ_FAILED,
+            assertThrows(LocalAudioFailure::class.java) { documents.directoryName(tree) }.error)
+    }
+
     @Test fun recursionIsExplicitAndSkipsImagesAndText() {
         val result = documents.children(tree, true)
         assertEquals(listOf("1.opus", "2.mp3", "3.wav", "10.m4b"), result.map { it.name })
@@ -173,6 +210,7 @@ class AndroidLocalAudioDocumentsTest {
         var modifiedAtMs = 0L
         var rejectModificationColumn = false
         var includeDsf = false
+        var rootName: String? = "音乐收藏"
         val queries = mutableListOf<String>()
         override fun onCreate() = true
         override fun getType(uri: Uri) = "audio/mpeg"
@@ -190,7 +228,7 @@ class AndroidLocalAudioDocumentsTest {
                     putString(DocumentsContract.EXTRA_ERROR, error)
                 }
             }
-            fun row(id: String, name: String, mime: String, size: Long) {
+            fun row(id: String, name: String?, mime: String, size: Long) {
                 val values: List<Any?> = columns.map { column -> when (column) {
                     DocumentsContract.Document.COLUMN_DOCUMENT_ID -> id
                     OpenableColumns.DISPLAY_NAME -> name
@@ -215,6 +253,8 @@ class AndroidLocalAudioDocumentsTest {
                         row("dff", "album.dff", "application/octet-stream", 123)
                     }
                 }
+            } else if (uri.toString() == "content://local-audio-test/tree/root/document/root") {
+                row("root", rootName, DocumentsContract.Document.MIME_TYPE_DIR, 0)
             } else if (!empty) row("a", "2.mp3", "audio/mpeg", 123)
             return cursor
         }
